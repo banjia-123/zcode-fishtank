@@ -1,0 +1,19 @@
+# 真实凭据与个人数据——绝不入库
+fish-adapter/config.json
+guard/allow-sessions.json
+fishpond/
+fishpond-template/memory/.learner-cursor
+logs/
+*.log
+
+# 本地产物
+*.zip
+*.bak
+*.bak-*
+node_modules/
+.inbox/
+.outbox/
+
+# 系统文件
+Thumbs.db
+Desktop.ini

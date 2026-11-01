@@ -1,0 +1,4 @@
+{
+  "_comment": "施工/运维会话白名单：名单内的 sessionId 全放行（guard 只保护鱼）。正式运行建议清空 sessions 数组。",
+  "sessions": []
+}
