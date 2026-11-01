@@ -1,0 +1,52 @@
+{
+  "onebot": {
+    "wsUrl": "ws://127.0.0.1:3001",
+    "httpUrl": "http://127.0.0.1:3000",
+    "accessToken": "<自生成强随机token，与NapCat onebot11配置保持一致>",
+    "selfId": "<鱼QQ号>"
+  },
+  "zcode": {
+    "callbackUrl": "http://127.0.0.1:<ZCode入站端口>/api/bots/webhook",
+    "botId": "bot-fish-001",
+    "secret": ""
+  },
+  "listen": {
+    "port": 3200
+  },
+  "bridge": {
+    "mode": "file"
+  },
+  "botName": "<鱼名，如：小满>",
+  "p1": {
+    "busyWindowMs": 300000,
+    "busyMsgThreshold": 10,
+    "busyUserThreshold": 3,
+    "nonMustThrottleMs": 120000,
+    "staleMinutes": 10,
+    "maxPendingPerPoll": 10
+  },
+  "allow": {
+    "groups": [
+      "<测试群号>"
+    ],
+    "private": [
+      "<你的QQ号>"
+    ],
+    "allowAllWhenEmpty": false
+  },
+  "ownerQQ": "<你的QQ号>",
+  "limits": {
+    "maxRepliesPerMessage": 2,
+    "maxProactivePerGroupPerMinute": 1,
+    "maxDailyTotal": 200,
+    "maxRepliesPerGroupPer5Min": 5,
+    "maxWindow5MinMs": 300000,
+    "maxSegments": 4,
+    "busyMaxSegments": 2,
+    "maxTotalChars": 150
+  },
+  "bannedWords": [],
+  "audit": {
+    "blockPrivateIP": false
+  }
+}
