@@ -13,7 +13,7 @@
 - 被 @ 或点名**必回**，闲聊看场合插话，话题翻篇不追
 - 有独立人格卡（毒舌/温吞随你定）、有长期记忆、会学群里的行话
 - 全部跑在自己电脑上：NapCat（QQ 协议端）+ 自研适配器 + ZCode（大脑与安全边界）
-- 成本：月 ¥20~80（取决于轮询频率与模型档位，按 flash 级模型测算）
+- 成本：实测口径（GLM-5.3-Flash，5 分钟轮询）空转轮 ≈0.07 元、消息轮 ≈0.08 元、学习轮 ≈0.17 元/次，24 小时在线月外推 ≈¥600——"按时上下线"近砍半，省钱杠杆排序见 §4
 
 它**不是**：多平台分发机器人、高频客服、无人值守自动回复机。它是一只"活在群里的角色"，上限由人格卡质量决定，下限由工程闸门兜住。
 
@@ -84,7 +84,10 @@ fish-adapter/
 ├── lib/outbound.mjs  出站链路（含分条发送）
 ├── lib/bridge.mjs    文件桥（inbox/outbox/index 维护）
 ├── lib/onebot.mjs    OneBot 客户端（WS + HTTP action）
-└── lib/util.mjs      日志 / 审计落盘
+├── lib/util.mjs      日志 / 审计落盘
+├── maintenance.mjs   会话库清理（默认预览，--apply 执行）
+├── vocab-review.mjs  行话审校（交互）——双击 审词库.cmd
+└── memory-review.mjs 记忆审校（交互）——双击 审记忆.cmd
 ```
 
 **config.json 模板**（关键项）：
@@ -209,6 +212,7 @@ persona.md 必备要素（实测有效结构）：
 - 适配器全量留档 `logs/chat.jsonl`（脱敏：只记昵称与文本，截断 200 字）
 - 独立 learner automation（每 6 小时）游标式读增量 → 提取行话候选 → `vocab.json` 写 `status: "candidate"`
 - **人工确认闸门不可省**：candidate → confirmed 才注入聊天任务书（防学到脏话/错话直接上群）
+- **审校工具**：双击 `fish-adapter/审词库.cmd`（行话逐条转正/驳回，confirmed 名额 ≤15）与 `审记忆.cmd`（记忆逐条迁入/删除，core.md 红线 60 行）——即审即存、自动备份 .bak、中断不丢已审的
 - 记忆三层：`core.md`（人工确认才进）/ `candidates.md`（鱼写候选）/ `short.json`（当前话题）
 
 ### 运维配套（上线前做好，一劳永逸）
@@ -227,8 +231,9 @@ persona.md 必备要素（实测有效结构）：
 | 上线 / 下线 | 双击一键脚本（或手动 `napcat.bat -q <鱼号>`；下线按 unpacked 特征杀进程，勿按名杀 QQ.exe） |
 | 加新群 | `config.json` 的 `allow.groups` 加群号 → 重启适配器（只加自己的群，进群前 P0.5 必须全过） |
 | 调人格 | 直接编辑 `persona.md`，下一轮即生效 |
-| 行话转正 | `vocab.json` 把 `candidate` 改 `confirmed` |
-| 长期记忆 | 从 `candidates.md` 挑事实迁入 `core.md`（人工闸门） |
+| 行话转正 | 双击 `fish-adapter/审词库.cmd` 逐条审（或手改 `vocab.json` 的 status，改完验 JSON） |
+| 长期记忆 | 双击 `fish-adapter/审记忆.cmd` 逐条迁入/删除（或手动从 `candidates.md` 迁入 `core.md`） |
+| 定期清库 | `node fish-adapter/maintenance.mjs`（预览）→ 加 `--apply` 执行 |
 | 紧急闭嘴 | 停适配器（出站全断，入站留档） |
 | 管理命令 | `/reset` 仅 owner 生效（清 ZCode 会话上下文，省 token 最有效） |
 | 成本控制 | 杠杆排序：轮询频率 > 记忆/词条注入上限 > 稳定内容放 prompt 前部（吃缓存）> 压缩任务书 |
@@ -259,7 +264,7 @@ persona.md 必备要素（实测有效结构）：
 
 ## 6. 已知限制与演进路线
 
-- **轮询空转税**：定时轮询模式空轮也要钱（~1 元/天量级）。事件驱动 + 进程内直连（消息到达才调 API，无框架 token）可省 75%+ 且秒级响应，代价是绕开 ZCode 会话生态（guard/记账），需自行评估——建议先备档，成本敏感时再施工
+- **轮询空转税**：定时轮询模式空轮也要钱（实测空转轮 ≈0.07 元，占大头）。事件驱动 + 进程内直连（消息到达才调 API，无框架 token）实测口径可省 90%+ 且秒级响应，代价是绕开 ZCode 会话生态（guard/记账），需自行评估——简化备档见 [直连方案备档.md](直连方案备档.md)，成本敏感时再施工
 - **NapCat 稳定性**：偶发退出/假在线（新号风控 or 版本问题），fileLog 开启待复发查死因；备选方案 SnowLuma
 - **纯文本起步**：图片/语音收发未做，报文格式已预留扩展位
 - **官方 webhook**：ZCode 未来若实装 webhook bot 入站，文件桥可整体退役（适配器模式字段一键切换）
