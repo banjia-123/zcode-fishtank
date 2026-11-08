@@ -212,7 +212,7 @@ persona.md 必备要素（实测有效结构）：
 - 适配器全量留档 `logs/chat.jsonl`（脱敏：只记昵称与文本，截断 200 字）
 - 独立 learner automation（每 6 小时）游标式读增量 → 提取行话候选 → `vocab.json` 写 `status: "candidate"`
 - **人工确认闸门不可省**：candidate → confirmed 才注入聊天任务书（防学到脏话/错话直接上群）
-- **审校工具**：双击 `fish-adapter/审词库.cmd`（行话逐条转正/驳回，confirmed 名额 ≤15）与 `审记忆.cmd`（记忆逐条迁入/删除，core.md 红线 60 行）——即审即存、自动备份 .bak、中断不丢已审的
+- **审校工具**：双击 `fish-adapter/审词库.cmd`（行话逐条转正/驳回/复审下架，confirmed 名额 ≤20）与 `审记忆.cmd`（记忆逐条迁入/删除，core.md 红线 60 行）——即审即存、自动备份 .bak、中断不丢已审的
 - 记忆三层：`core.md`（人工确认才进）/ `candidates.md`（鱼写候选）/ `short.json`（当前话题）
 
 ### 运维配套（上线前做好，一劳永逸）
