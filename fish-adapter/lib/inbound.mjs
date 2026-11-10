@@ -1,8 +1,8 @@
 // 入站链路（规格 §4.2/§4.3）：
 // ① 自身过滤 → ② 白名单 → ③ 去重 → 管理命令拦截 → ④ 引用解析 → ⑤ @ 判断 → ⑥ 组装报文 → POST ZCode
-import { plainText, escapeAttr, log } from './util.mjs';
+import { plainText, escapeAttr, log, collectImages, guessImageExt } from './util.mjs';
 import { writeInboxFile, bridgeDirs } from './bridge.mjs';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 // chat.jsonl（v3 §4 学习素材）：白名单内消息全量留档（脱敏：记昵称与文本，截断 200 字）
@@ -66,10 +66,60 @@ export function isBusy(chatKey, cfg) {
   return arr.length > (cfg.p1?.busyMsgThreshold ?? 10) && users.size > (cfg.p1?.busyUserThreshold ?? 3);
 }
 
+// —— 图片附件（鱼看图 v1）：下载 QQ 图片到 fishpond\attachments\inbox\，text 占位换成本地相对路径 ——
+// 任务书教鱼用 Read 读取该路径看图；任何下载失败只降级占位文本，绝不阻塞消息入站
+const ATTACH_TTL_MS = 60 * 60 * 1000; // 附件保留 1 小时（12 个轮询轮内可回看，过期由 cleanAttachments 清）
+const IMG_MAX_BYTES = 10 * 1024 * 1024;
+
+async function attachImages(cfg, event, text) {
+  const urls = collectImages(event);
+  if (!urls.length) return text;
+  const base = bridgeDirs(cfg).base;
+  const dir = join(base, 'attachments', 'inbox');
+  try { mkdirSync(dir, { recursive: true }); } catch { /* 已存在 */ }
+  let out = text;
+  let n = 0;
+  for (const url of urls) {
+    n++;
+    const at = out.indexOf('[图片]');
+    if (at === -1) break; // 占位与 url 数不齐的异常报文：剩余保持原样
+    let rel = null;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length === 0 || buf.length > IMG_MAX_BYTES) throw new Error('bad size ' + buf.length);
+      rel = `attachments/inbox/${Date.now()}-${event.message_id ?? 'noid'}-img${n}${guessImageExt(url)}`;
+      writeFileSync(join(base, rel), buf);
+    } catch (e) {
+      log('inbound', `image download failed (msg=${event.message_id} #${n}): ${e.message}`);
+    }
+    out = out.slice(0, at) + (rel ? `[图片: ${rel}]` : '[图片: 下载失败]') + out.slice(at + '[图片]'.length);
+  }
+  return out;
+}
+
+// 清理过期附件（启动时一次 + 每 10 分钟定时；单文件失败继续，整体失败静默）
+function cleanAttachments(cfg) {
+  try {
+    const dir = join(bridgeDirs(cfg).base, 'attachments', 'inbox');
+    const now = Date.now();
+    for (const f of readdirSync(dir)) {
+      const full = join(dir, f);
+      try { if (now - statSync(full).mtimeMs > ATTACH_TTL_MS) unlinkSync(full); } catch { /* 继续 */ }
+    }
+  } catch { /* 目录不存在等，忽略 */ }
+}
+
 export function createInbound(cfg, onebot) {
   // chatKey -> { lastInboundAt }，供出站限额区分"回复"与"主动消息"
   const state = new Map();
   const nonMustLast = new Map(); // chatKey -> ts，热闹时非必回消息的投递节流
+
+  // 图片附件过期清理（1h 保留期；unref 不阻止进程退出）
+  cleanAttachments(cfg);
+  const attachTimer = setInterval(() => cleanAttachments(cfg), 10 * 60 * 1000);
+  attachTimer.unref?.();
 
   async function handle(event) {
     const selfId = String(cfg.onebot.selfId);
@@ -115,7 +165,7 @@ export function createInbound(cfg, onebot) {
 
     // at 段渲染修复：对自己的 at 渲染成名字（报文里 @<鱼号> 是陌生数字，鱼认不出是在叫自己）
     const renderAt = (t) => (cfg.botName ? t.split(`@${selfId}`).join(`@${cfg.botName}`) : t);
-    const text2 = renderAt(text);
+    const text2 = renderAt(await attachImages(cfg, event, text));
     if (reply) reply.text = renderAt(reply.text);
 
     // ⑤ @ / 名字判断（botName 为空时跳过名字匹配，防 includes('') 恒真）
