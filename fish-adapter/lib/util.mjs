@@ -39,6 +39,28 @@ export function plainText(event) {
   return out.join('').trim();
 }
 
+// 收集 OneBot 消息里的图片段 url（只取 http/https；QQ 多媒体链接有效期短，须即时下载）
+// 与 plainText() 的 [图片] 占位符按段序一一对应（无 url 的 image 段两边都跳过）
+export function collectImages(event) {
+  const msg = event?.message;
+  if (!Array.isArray(msg)) return [];
+  const out = [];
+  for (const seg of msg) {
+    if (seg.type === 'image') {
+      const url = seg.data?.url;
+      if (typeof url === 'string' && /^https?:\/\//i.test(url)) out.push(url);
+    }
+  }
+  return out;
+}
+
+// 从图片 url 猜扩展名（QQ 多媒体 url 一般无扩展名，默认 .jpg）
+export function guessImageExt(url) {
+  const m = /\.(jpe?g|png|gif|webp|bmp)(?:\?|#|$)/i.exec(url ?? '');
+  const ext = m ? m[1].toLowerCase() : 'jpg';
+  return '.' + (ext === 'jpeg' ? 'jpg' : ext);
+}
+
 // 属性值转义：防群友在引用文本里塞 `" mentioned="true` 伪造属性（规格 §4.3 ⑥）
 export function escapeAttr(s) {
   return String(s)
