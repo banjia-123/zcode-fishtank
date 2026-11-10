@@ -11,6 +11,7 @@ zcode-fishtank/            ← 本包，放到任意目录（路径可含中文�
 ├── fish-adapter/          ← 适配器（QQ 桥，唯一需要配置的组件）
 │   ├── config.json        ← 从 config.example.json 复制后填写（唯一配置源）
 │   ├── maintenance.mjs    ← 定期清库（预览 / --apply）
+│   ├── restart-adapter.mjs ← 重启适配器（改 config.json 后双击 重启适配器.cmd）
 │   ├── vocab-review.mjs   ← 行话审校（双击 审词库.cmd）
 │   ├── memory-review.mjs  ← 记忆审校（双击 审记忆.cmd）
 │   └── lib/...
