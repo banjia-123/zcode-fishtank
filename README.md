@@ -51,6 +51,7 @@ zcode-fishtank/            ← 本包，放到任意目录（路径可含中文�
 | 紧急闭嘴 | 结束 fish-adapter 进程（出站全断） |
 | **定期清库** | 鱼每轮回复都会产生会话条目，攒多了 ZCode 变卡。`node fish-adapter/maintenance.mjs` 预览 → 加 `--apply` 执行（软删 1 小时前的旧会话、清 7 天前 run 历史；保护名单内会话不动）。ZCode 数据目录非默认位置时加 `--db "…\tasks-index.sqlite"` |
 | 审学习成果 | 双击 `审词库.cmd`（行话转正/驳回/复审下架，confirmed 名额 ≤20）与 `审记忆.cmd`（记忆迁入/删除，core.md 红线 60 行）；建议每周一次，即审即存、自动备份 |
+| **表情包库** | 往 `fishpond/emojis/` 放图（jpg/png/gif/webp），放入即可用——learner 会自动看图写"图说"（`emojis/index.json`，也可手动改）；鱼按情绪/梗选用，图文同条发出，一条最多 1 个 |
 | 看健康 | `fish-adapter/logs/adapter.log`、`napcat/watchdog.log` |
 
 ## 安全模型（一句话版）

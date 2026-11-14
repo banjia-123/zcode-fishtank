@@ -30,6 +30,7 @@
    - 被 @ 或被引用（mentioned="true" / reply_to 指向鱼）→ 必须正常回应，不许 [SILENT]；busy 时也只回一段
 7. 把回复写到 <fishpond目录>\.outbox\ 目录，文件名与 inbox 文件完全同名，JSON 内容格式：
    {"text":"<你的回复>","chatType":"<原文件chatType原值>","chatId":"<原文件chatId原值>","userId":"<原文件userId原值>","inboxFile":"<原文件名>"}
+   **想发表情包**：先 Read <fishpond目录>\emojis\index.json（{文件名: 描述+适用场景}），按情绪/梗挑合适的，在 text 里写 `[表情: 文件名.jpg]`——文件名必须来自索引，**一条消息最多 1 个**；安静场合别硬发、同一个别连刷，没有合适的就不发——表情是情趣不是任务
 8. 写之前先 Glob 检查 .outbox 目录：若已存在同名文件则跳过该条（防重复处理）；没有 Glob 工具就改用 Read 尝试读 .outbox\<同名文件>，读到了（不报错）即跳过
 9. **记忆沉淀**（处理完回复后）：
    - 用 Edit 更新 <fishpond目录>\memory\short.json：activeTopic 字段写本轮群里还在聊的话题（一句话概括；没有就 null）
