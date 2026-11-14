@@ -61,6 +61,51 @@ export function guessImageExt(url) {
   return '.' + (ext === 'jpeg' ? 'jpg' : ext);
 }
 
+// —— 视频/链接分享卡片（鱼看卡片 v1）：json 小程序卡片 → 标题/简介/链接/封面 ——
+// QQ 里各 App 分享（B 站/抖音/微博/网易云等）都是 json 卡片，字段名各家不同：
+// 容错遍历提取（不硬编码单一站点），标题/简介截断防超长；卡片内容按不可信数据处理
+const CARD_IMG_HINT = /(hdslb|gtimg|qpic|douyinpic|byteimg|ks-cdn|126\.net|xhscdn|alicdn|img\.bilibili)/i;
+const CARD_KEY_TITLE = /^(title|preview)$/i;
+const CARD_KEY_DESC = /^(desc|subtitle|summary)$/i;
+
+function pickCardFields(obj, depth, out) {
+  if (depth > 6 || !obj || typeof obj !== 'object') return;
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === 'string') {
+      if (/^https?:\/\//i.test(v)) {
+        out.urls.push(v);
+        if (/\.(jpe?g|png|webp|gif)(?:[?#]|$)/i.test(v) || CARD_IMG_HINT.test(v)) out.covers.push(v);
+      } else if (v.trim()) {
+        if (CARD_KEY_TITLE.test(k)) out.titles.push(v.trim());
+        else if (CARD_KEY_DESC.test(k)) out.descs.push(v.trim());
+      }
+    } else if (v && typeof v === 'object') {
+      pickCardFields(v, depth + 1, out);
+    }
+  }
+}
+
+// 每个 json 段产出一条 {title, desc, url, cover}；提取不到任何字段则 null（降级占位用）
+export function extractAppCards(event) {
+  const msg = event?.message;
+  if (!Array.isArray(msg)) return [];
+  const out = [];
+  for (const seg of msg) {
+    if (seg.type !== 'json') continue;
+    let card = null;
+    try { card = JSON.parse(seg.data?.data ?? '{}'); } catch { /* 坏 json */ }
+    const fields = { titles: [], descs: [], urls: [], covers: [] };
+    if (card && typeof card === 'object') pickCardFields(card, 0, fields);
+    const title = (fields.titles[0] ?? fields.descs[0] ?? '').slice(0, 120);
+    const desc = (fields.descs.find((d) => d !== fields.titles[0]) ?? '').slice(0, 200);
+    const url = fields.urls.find((u) => /b23\.tv|bilibili/i.test(u)) ?? fields.urls[0] ?? null;
+    const cover = fields.covers[0] ?? null;
+    if (title || desc || url || cover) out.push({ title, desc, url, cover });
+    else { log('inbound', `card unparsed, raw=${String(seg.data?.data ?? '').slice(0, 400)}`); out.push(null); }
+  }
+  return out;
+}
+
 // 属性值转义：防群友在引用文本里塞 `" mentioned="true` 伪造属性（规格 §4.3 ⑥）
 export function escapeAttr(s) {
   return String(s)

@@ -1,6 +1,6 @@
 // 入站链路（规格 §4.2/§4.3）：
 // ① 自身过滤 → ② 白名单 → ③ 去重 → 管理命令拦截 → ④ 引用解析 → ⑤ @ 判断 → ⑥ 组装报文 → POST ZCode
-import { plainText, escapeAttr, log, collectImages, guessImageExt } from './util.mjs';
+import { plainText, escapeAttr, log, collectImages, guessImageExt, extractAppCards } from './util.mjs';
 import { writeInboxFile, bridgeDirs } from './bridge.mjs';
 import { appendFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -111,6 +111,48 @@ function cleanAttachments(cfg) {
   } catch { /* 目录不存在等，忽略 */ }
 }
 
+// —— 分享卡片（鱼看卡片 v1）：json 卡片 → [视频卡片: 标题 | 简介 | 链接 | 封面] 占位注入 ——
+// 封面复用图片下载管线（10s/10MB/失败降级）；解析失败降级 [卡片: 无法解析]，不阻塞入站
+async function attachCards(cfg, event, text) {
+  const cards = extractAppCards(event);
+  if (!cards.length) return text;
+  const base = bridgeDirs(cfg).base;
+  const dir = join(base, 'attachments', 'inbox');
+  try { mkdirSync(dir, { recursive: true }); } catch { /* 已存在 */ }
+  let out = text;
+  let n = 0;
+  for (const card of cards) {
+    const at = out.indexOf('[json]');
+    if (at === -1) break; // 占位与卡片数不齐的异常报文：剩余保持原样
+    n++;
+    let injected = '[卡片: 无法解析]';
+    if (card) {
+      let coverRel = null;
+      if (card.cover) {
+        try {
+          const res = await fetch(card.cover, { signal: AbortSignal.timeout(10_000) });
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          const buf = Buffer.from(await res.arrayBuffer());
+          if (buf.length === 0 || buf.length > 10 * 1024 * 1024) throw new Error('bad size ' + buf.length);
+          const ext = /\.(jpe?g|png|webp|gif)/i.exec(card.cover)?.[1]?.toLowerCase() ?? 'jpg';
+          coverRel = `attachments/inbox/${Date.now()}-card${n}.${ext === 'jpeg' ? 'jpg' : ext}`;
+          writeFileSync(join(base, coverRel), buf);
+        } catch (e) {
+          log('inbound', `card cover download failed: ${e.message}`);
+        }
+      }
+      const parts = [];
+      if (card.title) parts.push(card.title);
+      if (card.desc) parts.push(card.desc);
+      if (card.url) parts.push('链接:' + card.url);
+      if (coverRel) parts.push('封面: ' + coverRel);
+      injected = '[视频卡片: ' + (parts.join(' | ') || '无法解析') + ']';
+    }
+    out = out.slice(0, at) + injected + out.slice(at + '[json]'.length);
+  }
+  return out;
+}
+
 export function createInbound(cfg, onebot) {
   // chatKey -> { lastInboundAt }，供出站限额区分"回复"与"主动消息"
   const state = new Map();
@@ -165,7 +207,7 @@ export function createInbound(cfg, onebot) {
 
     // at 段渲染修复：对自己的 at 渲染成名字（报文里 @<鱼号> 是陌生数字，鱼认不出是在叫自己）
     const renderAt = (t) => (cfg.botName ? t.split(`@${selfId}`).join(`@${cfg.botName}`) : t);
-    const text2 = renderAt(await attachImages(cfg, event, text));
+    const text2 = renderAt(await attachCards(cfg, event, await attachImages(cfg, event, text)));
     if (reply) reply.text = renderAt(reply.text);
 
     // ⑤ @ / 名字判断（botName 为空时跳过名字匹配，防 includes('') 恒真）
