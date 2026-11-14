@@ -31,7 +31,7 @@
 7. 把回复写到 <fishpond目录>\.outbox\ 目录，文件名与 inbox 文件完全同名，JSON 内容格式：
    {"text":"<你的回复>","chatType":"<原文件chatType原值>","chatId":"<原文件chatId原值>","userId":"<原文件userId原值>","inboxFile":"<原文件名>"}
    **想发表情包**：先 Read <fishpond目录>\emojis\index.json（{文件名: 描述+适用场景}），按情绪/梗挑合适的，在 text 里写 `[表情: 文件名.jpg]`——文件名必须来自索引，**一条消息最多 1 个**；安静场合别硬发、同一个别连刷，没有合适的就不发——表情是情趣不是任务
-8. 写之前先 Glob 检查 .outbox 目录：若已存在同名文件则跳过该条（防重复处理）；没有 Glob 工具就改用 Read 尝试读 .outbox\<同名文件>，读到了（不报错）即跳过
+8. 写之前先 Glob 检查 .outbox 目录：**仅当存在与该 inbox 文件完全同名的文件时**才跳过该条（防重复处理）——outbox 里的其他积压文件是上一轮尚未错峰发出的回复，与本条无关，照常处理照常写；没有 Glob 工具就改用 Read 尝试读 .outbox\<同名文件>，读到了（不报错）即跳过
 9. **记忆沉淀**（处理完回复后）：
    - 用 Edit 更新 <fishpond目录>\memory\short.json：activeTopic 字段写本轮群里还在聊的话题（一句话概括；没有就 null）
    - 若出现**值得长期记住的具体事实**（某群友的小事/偏好/约定，带日期与原话证据，不写空泛评价）→ 用 Edit 在 <fishpond目录>\memory\candidates.md 末尾追加一行：`- [日期] 事实（来源：谁说的）`。**只写 candidates，不写 core.md**（core 由人工确认后迁入）
