@@ -79,6 +79,8 @@ export function createOutbound(cfg, onebot, inboundState) {
     const chatId = meta.chatId != null ? String(meta.chatId) : null;
     const userId = meta.userId != null ? String(meta.userId) : null;
     const source = meta.source ?? 'http';
+    // 被回复消息的 QQ id（文件桥从 inbox 文件名解析）；proactive 主动消息无 → 不挂引用
+    const replyToId = /^\d+$/.test(String(meta.replyToMessageId ?? '')) ? Number(meta.replyToMessageId) : null;
 
     const drop = (reason, extra = '') => {
       log('outbound', `dropped (${reason}) ${extra} [${source}]`);
@@ -181,6 +183,7 @@ export function createOutbound(cfg, onebot, inboundState) {
       let r = null;
       if (!segments.length && emojiSeg) {
         const message = [emojiSeg];
+        if (replyToId != null) message.unshift({ type: 'reply', data: { id: replyToId } });
         r = chatType === 'group'
           ? await onebot.action('send_group_msg', { group_id: /^\d+$/.test(chatId) ? Number(chatId) : chatId, message })
           : await onebot.action('send_private_msg', { user_id: /^\d+$/.test(userId) ? Number(userId) : userId, message });
@@ -190,6 +193,7 @@ export function createOutbound(cfg, onebot, inboundState) {
           if (i > 0) await sleep(1500 + Math.random() * 2500);
           const message = [{ type: 'text', data: { text: segments[i] } }];
           if (i === segments.length - 1 && emojiSeg) message.push(emojiSeg);
+          if (i === 0 && replyToId != null) message.unshift({ type: 'reply', data: { id: replyToId } }); // 引用只挂首条
           if (chatType === 'group') {
             const gid = /^\d+$/.test(chatId) ? Number(chatId) : chatId;
             r = await onebot.action('send_group_msg', { group_id: gid, message });
