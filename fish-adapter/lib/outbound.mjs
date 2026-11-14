@@ -3,11 +3,36 @@
 // HTTP 回调（/zcode）与文件桥（outbox 轮询）共用 processMessage 核心。
 import { auditAlert, log } from './util.mjs';
 import { isBusy } from './inbound.mjs';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { bridgeDirs } from './bridge.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// —— 表情包（鱼发表情 v1）：text 里 [表情: 文件名] → 剥除标记，发送时拼 image 段（图文同条）——
+// 库 = fishpond/emojis/（人工策展，放入即可用），索引 = emojis/index.json（learner/人维护描述）
+// 三重防穿越：basename 化 / 扩展名白名单 / 存在性校验；一条消息最多 1 个表情
+const EMOJI_EXTS = /\.(jpe?g|png|gif|webp)$/i;
+const EMOJI_MARK = /\[表情[:：]\s*([^\]]{1,120}?)\s*\]/g;
+
+function extractEmoji(cfg, rawText) {
+  let text = rawText;
+  let emojiPath = null;
+  const marks = [...text.matchAll(EMOJI_MARK)];
+  for (const m of marks) {
+    const name = m[1].trim();
+    const base = name.replace(/\\/g, '/').split('/').pop(); // basename 化：任何路径成分一律剥掉
+    let ok = null;
+    if (base && EMOJI_EXTS.test(base)) {
+      const abs = join(bridgeDirs(cfg).base, 'emojis', base);
+      try { if (statSync(abs).isFile()) ok = abs; } catch { /* 不存在 → 降级 */ }
+    }
+    if (ok && !emojiPath) emojiPath = ok; // 只取第一个有效的表情
+    else if (!ok) log('outbound', `emoji skipped: "${name.slice(0, 60)}"（不在库内或扩展名不符，按纯文本发）`);
+    text = text.replace(m[0], ''); // 所有标记一律从 text 清除（防字面外漏）
+  }
+  return { text: text.trim(), emojiPath };
+}
 
 // 发言记录（v3 §8.2 feedback 迭代基础）：鱼每次成功发言追加一行，供"像人/像AI"标注
 function recordSpeak(cfg, chatKey, text, source) {
@@ -46,7 +71,10 @@ export function createOutbound(cfg, onebot, inboundState) {
   // 核心：一条待发送文本的完整出站处理。meta = { chatType, chatId, userId, source }
   // 返回 { action: 'sent'|'dropped'|'error', reason? }
   async function processMessage(rawText, meta) {
-    const text = typeof rawText === 'string' ? rawText : '';
+    // 表情标记先剥（在 empty 检查前：纯表情无文字也合法）
+    const emoji0 = typeof rawText === 'string' ? extractEmoji(cfg, rawText) : { text: '', emojiPath: null };
+    const text = emoji0.text;
+    const emojiPath = emoji0.emojiPath;
     const chatType = meta.chatType === 'group' ? 'group' : 'private';
     const chatId = meta.chatId != null ? String(meta.chatId) : null;
     const userId = meta.userId != null ? String(meta.userId) : null;
@@ -57,7 +85,7 @@ export function createOutbound(cfg, onebot, inboundState) {
       return { action: 'dropped', reason };
     };
 
-    if (!text.trim()) return drop('empty');
+    if (!text.trim() && !emojiPath) return drop('empty');
     if (chatType === 'group' && !chatId) return drop('missing-chat-id', '(出站报文没有 chatId，核对报文字段)');
     if (chatType === 'private' && !userId) return drop('missing-user-id');
 
@@ -147,20 +175,30 @@ export function createOutbound(cfg, onebot, inboundState) {
       if (kept.length && kept[kept.length - 1] !== lines[lines.length - 1]) {
         log('outbound', `truncated → ${chatKey}（${lines.length} 段 ${text.length} 字超 maxTotalChars=${maxChars}，保留 ${kept.length} 段）`);
       }
-      const segments = kept.length > 0 ? kept : [text.trim().slice(0, maxChars)];
+      // 纯表情（无文字）：只发一条 image 消息；否则文字段逐条发，最后一段拼表情段（图文同条）
+      const segments = kept.length > 0 ? kept : (emojiPath ? [] : [text.trim().slice(0, maxChars)]);
+      const emojiSeg = emojiPath ? { type: 'image', data: { file: 'file:///' + emojiPath.replace(/\\/g, '/') } } : null;
       let r = null;
-      for (let i = 0; i < segments.length; i++) {
-        // 拟人打字节奏：段间 1.5~4 秒随机延迟——同样的内容，六连发是刷屏，隔几秒蹦一句是聊天
-        if (i > 0) await sleep(1500 + Math.random() * 2500);
-        const seg = segments[i];
-        if (chatType === 'group') {
-          const gid = /^\d+$/.test(chatId) ? Number(chatId) : chatId;
-          r = await onebot.action('send_group_msg', { group_id: gid, message: seg });
-        } else {
-          const uid = /^\d+$/.test(userId) ? Number(userId) : userId;
-          r = await onebot.action('send_private_msg', { user_id: uid, message: seg });
+      if (!segments.length && emojiSeg) {
+        const message = [emojiSeg];
+        r = chatType === 'group'
+          ? await onebot.action('send_group_msg', { group_id: /^\d+$/.test(chatId) ? Number(chatId) : chatId, message })
+          : await onebot.action('send_private_msg', { user_id: /^\d+$/.test(userId) ? Number(userId) : userId, message });
+      } else {
+        for (let i = 0; i < segments.length; i++) {
+          // 拟人打字节奏：段间 1.5~4 秒随机延迟——同样的内容，六连发是刷屏，隔几秒蹦一句是聊天
+          if (i > 0) await sleep(1500 + Math.random() * 2500);
+          const message = [{ type: 'text', data: { text: segments[i] } }];
+          if (i === segments.length - 1 && emojiSeg) message.push(emojiSeg);
+          if (chatType === 'group') {
+            const gid = /^\d+$/.test(chatId) ? Number(chatId) : chatId;
+            r = await onebot.action('send_group_msg', { group_id: gid, message });
+          } else {
+            const uid = /^\d+$/.test(userId) ? Number(userId) : userId;
+            r = await onebot.action('send_private_msg', { user_id: uid, message });
+          }
+          if (!r || r.status !== 'ok') break;
         }
-        if (!r || r.status !== 'ok') break;
       }
       if (r && r.status === 'ok') {
         dailyCount += 1;
@@ -177,7 +215,7 @@ export function createOutbound(cfg, onebot, inboundState) {
           st.proactive.push(Date.now());
           perChat.set(chatKey, st);
         }
-        log('outbound', `sent → ${chatKey} (${isReply ? 'reply' : 'proactive'} daily=${dailyCount}) [${source}]`);
+        log('outbound', `sent → ${chatKey} (${isReply ? 'reply' : 'proactive'} daily=${dailyCount}${emojiPath ? ' +emoji' : ''}) [${source}]`);
         return { action: 'sent' };
       }
       log('outbound', `onebot send failed: ${JSON.stringify(r).slice(0, 200)} [${source}]`);
