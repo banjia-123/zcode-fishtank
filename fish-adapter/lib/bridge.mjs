@@ -42,7 +42,10 @@ function updateIndex(inbox, mutator, maxPending = 10) {
   while (idx.pending.length > maxPending) {
     const i = idx.pending.findIndex((x) => !x.must);
     const rm = idx.pending.splice(i === -1 ? 0 : i, 1)[0];
-    try { unlinkSync(join(inbox, rm.f)); } catch { /* 已消失 */ }
+    try {
+      unlinkSync(join(inbox, rm.f));
+      log('bridge', `pending 溢出挤掉（话题翻篇放弃）: ${rm.f}${rm.must ? ' [must]' : ''}`);
+    } catch { /* 已消失 */ }
   }
   writeFileSync(indexFile, JSON.stringify(idx, null, 1), 'utf8');
 }
