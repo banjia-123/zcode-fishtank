@@ -84,6 +84,8 @@ export function startOutboxPolling(cfg, processMessage, intervalMs = 1000) {
           chatId: body.chatId,
           userId: body.userId,
           inboxFile: f,
+          // inbox 文件名 = <ts>-<messageId>.json：解析出被回复消息的 QQ id，供出站挂引用（群友看到她在回谁）
+          replyToMessageId: (f.match(/-(\d+)\.json$/)?.[1]) ?? null,
           source: 'file-bridge',
         };
         const r = await processMessage(body.text, meta);
