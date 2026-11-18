@@ -24,7 +24,7 @@
    **status 必须是 candidate，绝不写成 confirmed**——转正由人工确认，这是铁律
 6. 顺带粗略更新 <fishpond目录>\memory\style.json：平均消息长度（字数）、不打标点的比例、常见开头词（取前 5 个高频词）
    **顺带维护表情包索引**：扫 <fishpond目录>\emojis\ 目录下的图片文件，发现 emojis\index.json 里没登记的 → 用 Read 看图内容 → 在 index.json 登记 {"文件名": "一句话描述+适用场景"}；已登记的跳过
-7. 用 Edit 更新 <fishpond目录>\memory\.learner-cursor 为本次 Read 返回中最后一行的行号数字本身（Read 输出最末行行首显示的数字，**不加 1 不减 1**）
+7. 用 Edit 更新 <fishpond目录>\memory\.learner-cursor 为本次 Read 返回中**最后一条非空内容的行号**（若末尾有空行则跳过，取最后一个有内容的行的行号；不加 1 不减 1）
 8. 只允许 Read/Glob/Write/Edit 工具且全部限定在 <fishpond目录>\ 目录内；禁止使用 Bash；禁止访问 fishpond 之外的任何路径；禁止生成任何要发送到 QQ 的内容
 ```
 
