@@ -40,7 +40,7 @@ config.bridge.mode 改回 "webhook" 即可用（等 ZCode 实装入站后）。
    - `allow.groups` / `allow.private`：白名单群号/私聊 QQ
    - `ownerQQ`：主号（管理命令唯一使用者）
    - `botName`：鱼的名字（P2 定；为空则不做名字匹配）
-   - `zcode.secret` 已生成：`e78209bd2b14c7b70cd0b48afbd0adae4055bbe620c565ed`（ZCode 侧填同一个）
+   - `zcode.secret`：自行生成——`node -e "process.stdout.write(require('crypto').randomBytes(24).toString('hex'))"`（48 位 hex），ZCode bot 侧填同一个；webhook 模式必需，留空 = 适配器侧验签禁用（仅限纯本机回环部署）
 3. **ZCode bot**（设置 → 机器人 → 新建，provider=webhook）：
    - `webhookUrl` = `http://127.0.0.1:3200/zcode`
    - secret 同上；`allowedWorkspaces` = `["fishpond"]`（**绝不能留空，空 = 全放行**）
