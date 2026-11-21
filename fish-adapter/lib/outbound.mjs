@@ -6,7 +6,8 @@
 import { auditAlert, log, ROOT_DIR } from './util.mjs';
 import { isBusy } from './inbound.mjs';
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, join, dirname as pathDirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { bridgeDirs } from './bridge.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -36,6 +37,36 @@ function stripEmojiMarks(rawText, cfg, chatKey) {
     text = text.replace(m[0], '');
   }
   return text.trim();
+}
+
+// —— 表情硬闸（G9b，2026-11-21）：emojiGate.enabled 且该 chatKey 最近 window 条发言已有 ≥ max 条
+// 带表情 → 本次表情降级纯文本。prompt 软引导（踩坑 31 / 措辞 v1-v3）对 Flash/low 档无效的工程兜底。
+// 开关/阈值现读 config（mtime 缓存）——控制台切开关即时生效，无需重启适配器。
+const EMOJI_GATE_DEFAULT = { enabled: true, window: 5, max: 2 };
+const EMOJI_GATE_FILE = join(pathDirname(fileURLToPath(import.meta.url)), 'config.json');
+let gateCache = { mtime: 0, state: { ...EMOJI_GATE_DEFAULT } };
+function emojiGateState() {
+  try {
+    const st = statSync(EMOJI_GATE_FILE);
+    if (st.mtimeMs === gateCache.mtime) return gateCache.state;
+    const g = JSON.parse(readFileSync(EMOJI_GATE_FILE, 'utf8')).emojiGate ?? {};
+    gateCache = { mtime: st.mtimeMs, state: {
+      enabled: g.enabled !== false,
+      window: Math.max(2, Number(g.window) || 5),
+      max: Math.max(1, Number(g.max) || 2),
+    } };
+    return gateCache.state;
+  } catch { return { ...EMOJI_GATE_DEFAULT }; }
+}
+function recentEmojiCount(cfg, chatKey, window) {
+  try {
+    const speak = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
+    const rows = readFileSync(speak, 'utf8').trim().split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter((r) => r && r.chat === chatKey)
+      .slice(-window);
+    return rows.filter((r) => r.emoji).length;
+  } catch { return 0; }
 }
 
 // 发言记录（v3 §8.2 feedback 迭代基础）：鱼每次成功发言追加一行，供"像人/像AI"标注
@@ -183,17 +214,25 @@ export function createOutbound(cfg, onebot, inboundState) {
           return { text: stripped, emojiPath };
         })();
     const text = emoji0.text;
-    const emojiPath = emoji0.emojiPath;
+    let emojiPath = emoji0.emojiPath;
     // 新格式 sticker 校验失败的降级日志（字段非法/文件不在库内 → 纯文本发）
     if (isNew && batch.sticker != null && !emojiPath) {
       log('outbound', `WARN outbound sticker 非法已忽略: ${String(batch.sticker).slice(0, 40)} [${source}]`);
     }
 
-    if (!text.trim() && !emojiPath) return drop('empty');
-    if (chatType === 'group' && !chatId) return drop('missing-chat-id', '(出站报文没有 chatId，核对报文字段)');
-    if (chatType === 'private' && !userId) return drop('missing-user-id');
-
     const chatKey = chatType === 'group' ? `g:${chatId}` : `p:${userId}`;
+
+    // ①.5 表情硬闸判定（G9b）：闸开且该 chatKey 最近 window 条已带 ≥ max 次表情 → 本次降级纯文本
+    const gate = emojiGateState();
+    if (emojiPath && gate.enabled) {
+      const recent = recentEmojiCount(cfg, chatKey, gate.window);
+      if (recent >= gate.max) {
+        log('outbound', `emoji gated: ${chatKey} 最近 ${gate.window} 条已带 ${recent} 次表情（上限 ${gate.max}）——本次降级纯文本`);
+        emojiPath = null;
+      }
+    }
+
+    if (!text.trim() && !emojiPath) return drop('empty');
 
     // ② [SILENT] 过滤（对整段——模型可能两种格式都写）
     if (SILENT_PREFIX.test(text)) return drop('silent');
@@ -219,6 +258,20 @@ export function createOutbound(cfg, onebot, inboundState) {
           return drop('audit-' + rule.name);
         }
       }
+    }
+    // ④.5 QQ 号泄露拦截（2026-11-21 实际事故：她把主人 QQ 明文发进群）：
+    // 配置里所有 QQ 数字（selfId/ownerQQ/白名单群与私聊）出现在出站文本 → 整条丢弃。
+    // 数字来自配置自身（非硬编码），QQ 号是主人隐私——按纪律宁可不说也不漏。
+    const qqDigits = [...new Set([
+      String(cfg.onebot?.selfId ?? ''),
+      String(cfg.ownerQQ ?? ''),
+      ...(Array.isArray(cfg.allow?.groups) ? cfg.allow.groups.map(String) : []),
+      ...(Array.isArray(cfg.allow?.private) ? cfg.allow.private.map(String) : []),
+    ].filter((q) => /^\d{5,12}$/.test(q)))];
+    const qqHit = qqDigits.find((q) => text.includes(q) || joined.includes(q));
+    if (qqHit) {
+      auditAlert('qq-leak', 'QQ号 ' + qqHit.slice(0, 3) + '****', text, chatKey);
+      return drop('qq-leak');
     }
     if (cfg.audit?.blockPrivateIP && PRIVATE_IP_RE.test(joined)) {
       auditAlert('leak', 'private-ip', joined, chatKey);
