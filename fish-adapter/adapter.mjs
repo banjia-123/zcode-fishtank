@@ -120,7 +120,13 @@ if (PATROL) {
       for (const mm of String(m.text ?? '').matchAll(/\[图片[:：]\s*(attachments\/[^\]\s]+?\.(?:png|jpe?g|gif|webp))\]/gi)) {
         try {
           const abs = join(P_DIR, mm[1]);
-          if (abs.startsWith(join(P_DIR, 'attachments')) && existsSync(abs)) attachments.push({ type: 'image', path: abs });
+          // 附件形状按协议 M4c/N4c 归一化实测（2026-11-21）：kind/localPath/filename/mimeType——
+          // {type,path} 键名会被静默丢弃（她看到的 prompt 说"图已附上"实际零附件 → "图是空的"）
+          if (abs.startsWith(join(P_DIR, 'attachments')) && existsSync(abs)) {
+            const ext = abs.split('.').pop().toLowerCase();
+            const mime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' }[ext] ?? 'image/jpeg';
+            attachments.push({ kind: 'image', localPath: abs, filename: mm[1].split('/').pop(), mimeType: mime });
+          }
         } catch { /* 越界/不存在跳过 */ }
         if (attachments.length >= 3) break; // 单批图片上限
       }
