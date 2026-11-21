@@ -1,10 +1,11 @@
+// 本地路径占位：<工作区> = 部署根目录（本仓库不留真实路径，本地跑前全局替换回来）
 // probe6：验证 session/send 的 attachments 图片输入——两种形状各测一次，问"图里有什么"
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const CFG = JSON.parse(readFileSync('D:/zcode工作区/fish-adapter/config.json', 'utf8'));
-const WORKSPACE = 'D:/zcode工作区/fishpond';
-const IMG = 'D:/zcode工作区/fishpond/attachments/inbox/1795227989086-231547960-img1.jpg'; // 高达柜实拍 105KB
+const CFG = JSON.parse(readFileSync('<工作区>/fish-adapter/config.json', 'utf8'));
+const WORKSPACE = '<工作区>/fishpond';
+const IMG = '<工作区>/fishpond/attachments/inbox/<消息图片文件名>.jpg'; // 本地跑时指向任意一张真实收到的图片附件
 
 const child = spawn(process.execPath, [CFG.patrol.cliPath, 'app-server'], { cwd: WORKSPACE, stdio: ['pipe', 'pipe', 'pipe'] });
 let seq = 0; const pending = new Map(); const handlers = new Set(); let buf = '';

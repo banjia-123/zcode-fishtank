@@ -1,8 +1,9 @@
+// 本地路径占位：<工作区> = 部署根目录（本仓库不留真实路径，本地跑前全局替换回来）
 // G6 配置两段式 + 上下线测试（生产 config 已备份为 .g6bak，结束后还原）
 import { readFileSync, writeFileSync, copyFileSync, existsSync, readdirSync, rmSync } from 'node:fs';
 
 const BASE = 'http://127.0.0.1:3201';
-const CFG = 'D:/zcode工作区/fish-adapter/config.json';
+const CFG = '<工作区>/fish-adapter/config.json';
 const BAK = CFG + '.g6bak';
 const H = { 'Content-Type': 'application/json', 'X-Fish-Console': '1' };
 const j = (r) => r.json();
@@ -35,7 +36,7 @@ try {
   console.log('[K10] 落盘验证: maxDailyWakes =', after.patrol.maxDailyWakes, '(期望 90) | silentHours.start =', after.patrol.silentHours.start, '(期望 02:00)');
   const a4 = await fetch(BASE + '/api/config/apply', { method: 'POST', headers: H, body: JSON.stringify({ applyToken: d5.data.applyToken, patchHash: d5.data.patchHash }) });
   console.log('[K11] 重用已耗 token →', a4.status, '(期望 410)');
-  const files = readdirSync('D:/zcode工作区/fish-adapter/backups').filter((f) => f.startsWith('config-'));
+  const files = readdirSync('<工作区>/fish-adapter/backups').filter((f) => f.startsWith('config-'));
   console.log('[K12] 备份目录:', files.length, '份');
 
   // mode：confirm 错 400 + offline 幂等真跑

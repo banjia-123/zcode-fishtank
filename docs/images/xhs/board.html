@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>鱼缸 · 小红书图组</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#0a0e14; font-family:"PingFang SC","Microsoft YaHei",sans-serif; }
+  .page {
+    width:1242px; height:1656px; position:relative; overflow:hidden;
+    background:linear-gradient(160deg,#0d1420 0%,#0a1018 55%,#0c1524 100%);
+    color:#e8eef5; display:flex; flex-direction:column;
+    page-break-after:always;
+  }
+  .page + .page { margin-top:40px; }
+  /* ---------- 封面 ---------- */
+  .cover { justify-content:center; padding:90px; }
+  .cover .k2 { font-size:34px; color:#5eead4; letter-spacing:10px; font-weight:700; margin-bottom:26px; font-family:Menlo,Consolas,monospace; }
+  .cover h1 { font-size:96px; line-height:1.28; font-weight:800; letter-spacing:2px; }
+  .cover h1 .hl { color:#5eead4; }
+  .cover .chat-row { display:flex; gap:26px; margin-top:60px; align-items:flex-start; }
+  .cover .chat-shot { width:calc(50% - 13px); height:520px; object-fit:cover; object-position:top;
+    border-radius:18px; border:1px solid rgba(94,234,212,.25); box-shadow:0 20px 60px rgba(0,0,0,.5); }
+  .cover .cover-note { margin-top:48px; font-size:30px; color:#7c93ab; text-align:center; letter-spacing:2px; }
+  /* ---------- 内页 ---------- */
+  .inner { padding:64px 70px 56px; }
+  .inner .kicker { font-size:30px; color:#5eead4; font-weight:700; letter-spacing:6px; margin-bottom:18px; }
+  .inner h2 { font-size:66px; font-weight:800; margin-bottom:16px; letter-spacing:1px; }
+  .inner .lede { font-size:32px; color:#9fb3c8; line-height:1.5; margin-bottom:40px; }
+  .shot { border-radius:20px; overflow:hidden; border:1px solid rgba(94,234,212,.22);
+    box-shadow:0 24px 70px rgba(0,0,0,.55); background:#0d1420;
+    height:1080px; position:relative; }
+  .shot img { width:100%; display:block; }
+  .bullets { margin-top:44px; display:flex; flex-direction:column; gap:22px; }
+  .bullet { display:flex; gap:18px; font-size:31px; line-height:1.5; color:#dbe7f3; }
+  .bullet b { color:#5eead4; font-weight:700; }
+  .bullet::before { content:"▸"; color:#2dd4bf; font-size:31px; flex:none; }
+  .pageno { position:absolute; top:70px; right:70px; font-size:26px; color:#57708c;
+    font-family:Menlo,Consolas,monospace; letter-spacing:2px; }
+  /* ---------- 尾页 ---------- */
+  .tail { justify-content:center; padding:90px; }
+  .tail h2 { font-size:80px; font-weight:800; line-height:1.3; margin-bottom:60px; }
+  .tail h2 .hl { color:#5eead4; }
+  .tail .arch { background:rgba(255,255,255,.04); border:1px solid rgba(94,234,212,.2); border-radius:20px;
+    padding:44px 50px; font-size:33px; line-height:1.9; color:#c7d6e6; margin-bottom:56px; }
+  .tail .arch b { color:#5eead4; }
+  .tail .safety { font-size:29px; color:#8ba3bd; line-height:1.8; margin-bottom:64px; }
+  .tail .cta { background:linear-gradient(135deg,#14b8a6,#0ea5e9); color:#04211d; font-size:44px; font-weight:800;
+    padding:36px 60px; border-radius:24px; display:inline-block; letter-spacing:2px; }
+  .tail .repo { margin-top:52px; font-size:36px; color:#5eead4; font-family:Menlo,Consolas,monospace; font-weight:700; }
+</style>
+</head>
+<body>
+
+<!-- 1 封面 -->
+<div class="page cover" id="p1">
+  <div class="k2">NEW DROP · 新版本来袭</div>
+  <h1>控制台上线<br><span class="hl">魔鱼（狐）降世</span></h1>
+  <div class="chat-row">
+    <img class="chat-shot" src="xhs/chat-1.jpg">
+    <img class="chat-shot" src="xhs/chat-2.jpg">
+  </div>
+  <div class="cover-note">她在群里的日常 —— 真实对话 · 已脱敏</div>
+</div>
+
+<!-- 2 总览 -->
+<div class="page inner" id="p2">
+  <div class="pageno">02 / 11</div>
+  <div class="kicker">OVERVIEW</div>
+  <h2>鱼的健康仪表盘</h2>
+  <div class="lede">今天唤醒多少次、说话率多少、钱包还剩多少额度——一屏尽收，异常自己会冒出来。</div>
+  <div class="shot"><img src="xhs-src/01-overview.png"></div>
+  <div class="bullets">
+    <div class="bullet">唤醒 <b>188</b> 次 · 说话率 <b>90%</b> · 拦截 <b>109</b> 次（拦截不花钱）</div>
+    <div class="bullet">按小时的唤醒直方图，静默时段（凌晨 1~7 点）她真的在睡觉</div>
+    <div class="bullet">最近唤醒流水：哪条消息触发、耗时几秒、为什么没开口</div>
+  </div>
+</div>
+
+<!-- 3 工作日志 -->
+<div class="page inner" id="p3">
+  <div class="pageno">03 / 11</div>
+  <div class="kicker">WAKE LOG</div>
+  <h2>每次开口都有账</h2>
+  <div class="lede">唤醒记录全程可追溯：耗时几秒、回了没、为什么沉默——但触发消息原文不落盘（审计红线）。</div>
+  <div class="shot"><img src="xhs-src/02-wakes.png"></div>
+  <div class="bullets">
+    <div class="bullet">平均响应 <b>5.4s</b>，被 @ 时约 7 秒开口——群友体感就是"秒回"</div>
+    <div class="bullet">min-interval 拦截：同群两次开口至少隔 20 秒，热闹群也不刷屏</div>
+    <div class="bullet">Token 消耗、缓存命中全部入账，花了多少钱心里有数</div>
+  </div>
+</div>
+
+<!-- 4 审阅 -->
+<div class="page inner" id="p4">
+  <div class="pageno">04 / 11</div>
+  <div class="kicker">REVIEW</div>
+  <h2>候选裁决 · 只批不编</h2>
+  <div class="lede">学习任务后台读群消息攒"行话候选"，攒够了等你裁决——批准才生效，AI 自己编的不算数。</div>
+  <div class="shot"><img src="xhs-src/03-review.png"></div>
+  <div class="bullets">
+    <div class="bullet">每条候选自带<b>热度、首见日期、使用场景、真实例句</b></div>
+    <div class="bullet">人工闸门：批准 / 驳回，跨两栏混合提交</div>
+    <div class="bullet">这就是她"越来越像群里的人"的养成机制</div>
+  </div>
+</div>
+
+<!-- 5 记忆与行话 -->
+<div class="page inner" id="p5">
+  <div class="pageno">05 / 11</div>
+  <div class="kicker">MEMORY</div>
+  <h2>她的记性你看得见</h2>
+  <div class="lede">群里的约定、梗、恩怨情仇都记在这——已生效 11 条 / 16 行，超线自动裁尾部，记忆不膨胀。</div>
+  <div class="shot"><img src="xhs-src/04-memory.png"></div>
+  <div class="bullets">
+    <div class="bullet">换模型芯子、认主剧本、生日定档、猫条账——全是群里<b>真实发生的对话</b></div>
+    <div class="bullet">每条记忆标注来源与日期，可追溯</div>
+    <div class="bullet">红线 60 行：记忆有上限，不会越滚越大</div>
+  </div>
+</div>
+
+<!-- 6 配置 -->
+<div class="page inner" id="p6">
+  <div class="pageno">06 / 11</div>
+  <div class="kicker">CONFIG</div>
+  <h2>改人格像改配置文件一样简单</h2>
+  <div class="lede">两段式变更：改表单 → 预览 diff → 30 秒确认应用，自动备份 10 份——手滑也有后悔药。</div>
+  <div class="shot"><img src="xhs-src/05-config.png"></div>
+  <div class="bullets">
+    <div class="bullet"><b>人格卡热改</b>：1090 字 persona 直接编辑，下次唤醒即生效</div>
+    <div class="bullet"><b>模型三件套</b>：聊天 / 学习 / 日记三个任务各选各的模型与推理力度</div>
+    <div class="bullet">额度、作息、去抖窗口、表情硬闸阈值全在这调</div>
+  </div>
+</div>
+
+<!-- 7 测试发送 -->
+<div class="page inner" id="p7">
+  <div class="pageno">07 / 11</div>
+  <div class="kicker">TEST SEND</div>
+  <h2>不进群也能喊她一句</h2>
+  <div class="lede">改完人格想立刻验证？测试发送直接走完整出站链路（审计 / 限额 / 分条全在），不惊动群友。</div>
+  <div class="shot"><img src="xhs-src/06-send.png"></div>
+  <div class="bullets">
+    <div class="bullet">链路自检：入站 → 大脑 → 出站一条龙跑通</div>
+    <div class="bullet">输出与群内发言走同一套审计与限额——测试也不放水</div>
+  </div>
+</div>
+
+<!-- 8 表情包 -->
+<div class="page inner" id="p8">
+  <div class="pageno">08 / 11</div>
+  <div class="kicker">EMOJI</div>
+  <h2>表情包是杀手锏，不是灌水工具</h2>
+  <div class="lede">她的私藏表情库 20 张，配上工程硬闸：最近 5 条已带 2 次表情 → 本次强制降级纯文本，防刷屏。</div>
+  <div class="shot"><img src="xhs-src/07-emoji.png"></div>
+  <div class="bullets">
+    <div class="bullet">硬闸阈值（窗口 / 上限）可调，一键开关，即时生效</div>
+    <div class="bullet">表情率从 91% 压到 <b>8%</b>——只在"图顶千言"时掏出来</div>
+    <div class="bullet">删除进回收站留 7 天，误删可找回</div>
+  </div>
+</div>
+
+<!-- 9 运维 -->
+<div class="page inner" id="p9">
+  <div class="pageno">09 / 11</div>
+  <div class="kicker">OPS</div>
+  <h2>养鱼也要有运维面板</h2>
+  <div class="lede">进程状态、双守护（QQ 崩拉 QQ、适配器崩拉适配器）、会话清理、操作流水——出事先看这。</div>
+  <div class="shot"><img src="xhs-src/08-ops.png"></div>
+  <div class="bullets">
+    <div class="bullet">watchdog 双守护 + 工具面自检 + 熔断兜底：升级 ZCode 她也不会乱说话</div>
+    <div class="bullet">会话清理一键执行（只读预览 → 确认清理）</div>
+    <div class="bullet">操作流水留痕：谁在什么时候动了什么</div>
+  </div>
+</div>
+
+<!-- 10 自动化任务 -->
+<div class="page inner" id="p10">
+  <div class="pageno">10 / 11</div>
+  <div class="kicker">AUTOMATIONS</div>
+  <h2>学习与日记，一键开关</h2>
+  <div class="lede">两个后台任务各挂各的模型：学习任务攒行话候选，日记任务每天写一篇少女视角吐槽日记。</div>
+  <div class="shot"><img src="xhs-src/09-automations.png"></div>
+  <div class="bullets">
+    <div class="bullet">日记列表自动落档，积压 / 缺口一目了然</div>
+    <div class="bullet">任务积压卡：该跑没跑的会亮黄灯提醒你</div>
+    <div class="bullet">跑任务用的是独立模型配置，与聊天互不挤占</div>
+  </div>
+</div>
+
+<!-- 11 尾页 -->
+<div class="page tail" id="p11">
+  <h2>三层架构<br><span class="hl">各管一摊，互不背锅</span></h2>
+  <div class="arch">
+    <b>NapCat</b>：QQ 协议端，watchdog 保活，可平替（LLOneBot / Lagrange）<br>
+    <b>自研适配器</b>：唯一的桥——入站白名单/场合闸门，出站审计/限额/分条<br>
+    <b>ZCode 大脑</b>：巡逻唤醒 + guard 边界，无消息零成本，三重守护兜底
+  </div>
+  <div class="safety">
+    安全红线：accessToken 与 QQ 号永不入库 · 触发消息原文不落盘 · 出站审计宁可不说也不漏 ·<br>
+    全部跑在自己电脑上，没有云、没有第三方中转。
+  </div>
+  <div class="cta">开源仓库点这 →</div>
+  <div class="repo">github.com/banjia-123/zcode-fishtank</div>
+</div>
+
+<script>
+  // ?p=N 只显示第 N 页（截图用）
+  const p = new URLSearchParams(location.search).get("p");
+  if (p) {
+    document.querySelectorAll(".page").forEach(el => { el.style.display = "none"; });
+    const target = document.getElementById("p" + p);
+    if (target) target.style.display = "flex";
+    document.body.style.background = "#000";
+    document.body.style.margin = "0";
+  }
+</script>
+</body>
+</html>
