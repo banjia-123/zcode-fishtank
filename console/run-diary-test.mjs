@@ -1,3 +1,4 @@
+// 本地路径占位：<工作区> = 部署根目录（本仓库不留真实路径，本地跑前全局替换回来）
 // 触发日记任务并轮询至完成
 const BASE = 'http://127.0.0.1:3201';
 const H = { 'Content-Type': 'application/json', 'X-Fish-Console': '1' };
@@ -14,7 +15,7 @@ for (let i = 1; i <= 40; i++) {
   if (r2.status !== 'running') break;
 }
 const fs = await import('node:fs');
-const diaryDir = 'D:/zcode工作区/fishpond/diary';
+const diaryDir = '<工作区>/fishpond/diary';
 try {
   const files = fs.readdirSync(diaryDir).filter((f) => f.endsWith('.md')).sort();
   console.log('[diary 目录]', files.join(', ') || '(空)');

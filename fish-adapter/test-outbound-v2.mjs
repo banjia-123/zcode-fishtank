@@ -68,7 +68,7 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
 // 用例 3 · 某行含盘符路径 → 整条丢弃 + audit.log 有记录且不含原文（D12）
 {
   const b = calls.length;
-  const r = await outbound.processMessage({ lines: ['看看这个', '就在 C:\\Users\\Administrator\\secret.txt 里'] }, meta('300', 'c3.json'));
+  const r = await outbound.processMessage({ lines: ['看看这个', '就在 C:\\Users\\someone\\secret.txt 里'] }, meta('300', 'c3.json'));
   ok(r.action === 'dropped' && r.reason === 'audit-win-path' && segs(b).length === 0, '3a 盘符路径整条丢弃', JSON.stringify(r));
   const tail = readFileSync(AUDIT_LOG, 'utf8').trim().split('\n').at(-1);
   ok(tail.includes('rule=win-path') && tail.includes('fp='), '3b audit.log 有指纹记录', tail.slice(0, 120));
