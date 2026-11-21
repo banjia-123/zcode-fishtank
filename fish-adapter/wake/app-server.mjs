@@ -92,8 +92,13 @@ export function createAppServerClient(cfg) {
   }
 
   function spawnServer() {
+    // ZCode 0.18.0 起 builtin provider 配置的查找路径变化（找 <resources>/glm/provider/ 而实际在
+    // <resources>/config/provider/）→ 无头 app-server 启动即崩（code=1 循环）。用官方环境变量显式
+    // 指定配置文件路径（从 CLI 路径推导：<resources>/config/provider/zcode-builtin.json）
+    const builtinCfg = join(dirname(dirname(CLI)), 'config', 'provider', 'zcode-builtin.json');
     child = spawn(process.execPath, [CLI, 'app-server'], {
       cwd: WORKSPACE,
+      env: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinCfg },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let buf = '';

@@ -305,7 +305,7 @@ persona.md 必备要素（实测有效结构）：
 | 29 | 表情包"使用次数"恒 0，但鱼明明在发 | 适配器写 `fishpond/logs/speak.jsonl`，控制台统计读 `fish-adapter/logs/`——**路径错位**；报"统计为 0"前先 grep 写入端实际路径 |
 | 30 | "附件目录只进不出"的缺口判断是误报 | `cleanAttachments`（1h TTL + 10min 轮询）一直在 inbound 里跑——**报缺口前先 grep 写入与清理两端**，别只看目录现状 |
 | 31 | 秒回链路上线后她 600 条发言 0 表情、看图全靠敷衍 | 表情/看图的**能力指引**只写在信箱任务书里，切链路时随任务删除一起丢失——跨链路迁移要逐项核对 prompt 能力清单（能力指引≠任务配置，属于运行时技能，须迁入新链路 prompt；零工具形态还需把索引摘要由适配器代读嵌入） |
-| 32 | 控制台图表柱状图全空、KPI 进度条满宽假象——**所有内联 style 属性失效** | CSP 缺 `style-src 'unsafe-inline'` → `style-src` 回落 `default-src 'self'` 阻止全部内联样式；受影响的只有依赖内联 height/width 的组件（图表/进度条），class 样式正常所以页面"看起来没坏"；修复 = CSP 加 `style-src 'self' 'unsafe-inline'`；CSSOM（cssText）写入不受 CSP 管，attribute 写入受管——排查时两者表现不同会误导方向 |
+| 33 | ZCode 自动更新 0.17.1→0.18.0 后无头 app-server 启动即崩（code=1 循环）：找不到 CLI ZCode Built-in Provider Config | 新版查找路径从 <resources>/glm/provider/ 变化——用官方环境变量 **ZCODE_BUILTIN_PROVIDER_CONFIG_FILE** 显式指向实际配置（<resources>/config/provider/zcode-builtin.json，从 cliPath 推导），spawn 时注入 env；巡逻与任务两条 spawn 链都要加 |
 
 ---
 

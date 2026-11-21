@@ -1242,7 +1242,9 @@ async function runTaskAsync(kind) {
   const modelSel = effectiveTaskModel(kind);
 
   // —— 精简协议客户端（照 wake 的 wakeOnce 收敛）——
-  const child = childSpawn(process.execPath, [cliPath, 'app-server'], { cwd: FISHPOND, stdio: ['pipe', 'pipe', 'pipe'] });
+  // 同款 ZCode 0.18.0 兼容：显式指定 builtin provider 配置路径（从 cliPath 推导）
+  const builtinCfg = join(dirname(dirname(cliPath)), 'config', 'provider', 'zcode-builtin.json');
+  const child = childSpawn(process.execPath, [cliPath, 'app-server'], { cwd: FISHPOND, env: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinCfg }, stdio: ['pipe', 'pipe', 'pipe'] });
   let seq = 0; let buf = '';
   const pending = new Map();
   const handlers = new Set();
