@@ -1015,14 +1015,14 @@ async function loadEmoji() {
   const d = r.data.emoji;
   const gateBtn = $('#em-gate-btn');
   if (gateBtn) {
-    const on = g?.data?.enabled;
-    gateBtn.textContent = on ? '🚦 硬闸 · 开' : '🚦 硬闸 · 关';
+    const on = g?.data?.emoji?.enabled;
+    gateBtn.textContent = '🚦 表情硬闸：' + (on ? '开（防刷屏生效中）' : '关');
     gateBtn.style.color = on ? '#6cc494' : '#8a959c';
     gateBtn.dataset.on = on ? '1' : '0';
     const gw = document.getElementById('em-gate-window');
     const gm = document.getElementById('em-gate-max');
-    if (gw && g?.data?.window) gw.value = g.data.window;
-    if (gm && g?.data?.max) gm.value = g.data.max;
+    if (gw && g?.data?.emoji?.window) gw.value = g.data.emoji.window;
+    if (gm && g?.data?.emoji?.max) gm.value = g.data.emoji.max;
   }
   if (d.state !== 'ready') {
     $('#em-strip').innerHTML = '';

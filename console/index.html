@@ -267,6 +267,13 @@
         <div>
           <h1>表情包</h1>
           <div class="sub" id="em-sub">浏览 / 上传 / 删除（进回收站）· 上传会同步补选图索引</div>
+          <div class="gate-line">
+            <button class="btn sm" id="em-gate-btn">🚦 表情硬闸：关</button>
+            <span class="gate-desc">防刷屏——她最近
+              <input type="number" id="em-gate-window" min="2" max="50" class="gate-num"> 条发言里已带
+              <input type="number" id="em-gate-max" min="1" max="30" class="gate-num"> 次表情，下一条的表情自动扣下不发。改动即存即生效
+            </span>
+          </div>
         </div>
         <div class="page-actions">
           <input class="search" id="em-search" placeholder="搜索文件名/描述…">
@@ -274,8 +281,6 @@
             <button data-k="usage" class="on">按使用</button>
             <button data-k="name">按名称</button>
           </div>
-          <span class="gate-nums" title="表情硬闸阈值：同群最近 N 条发言已带 M 次表情时，本次降级纯文本（即时生效）最近 <input type="number" id="em-gate-window" min="2" max="50" class="gate-num"> 条 · 最多 <input type="number" id="em-gate-max" min="1" max="30" class="gate-num"> 次</span>
-          <button class="btn" id="em-gate-btn" title="表情硬闸开关">🚦 硬闸 · 查询中</button>
           <button class="btn" id="em-trash-btn">回收站</button>
           <button class="btn primary" id="em-upload-btn">+ 上传</button>
         </div>

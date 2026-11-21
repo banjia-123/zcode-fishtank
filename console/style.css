@@ -334,3 +334,9 @@ select:focus,.date-input:focus{border-color:#3a7f78}
 /* ── 日记阅读（G8e）── */
 .diary-body{background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:16px 18px;font-size:12.5px;line-height:1.9;color:#c7d6dd;max-height:420px;overflow-y:auto}
 .diary-body h2,.diary-body h3,.diary-body h4{color:#cdeeea;margin:14px 0 8px}
+
+/* 表情硬闸说明行（G9b）：一句人话 + 内嵌迷你数字框 */
+.gate-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:#8a959c;margin-top:6px;padding:8px 12px;border:1px solid var(--line);border-radius:5px;background:rgba(72,189,178,.04)}
+.gate-line .btn{font-size:11px;padding:4px 10px}
+.gate-line input{width:46px;background:var(--panel-2);border:1px solid var(--line-2);border-radius:4px;color:var(--text);font-size:12px;padding:3px 6px;text-align:center;outline:none}
+.gate-line input:focus{border-color:#3a7f78}
