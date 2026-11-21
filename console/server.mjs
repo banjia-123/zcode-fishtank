@@ -1457,7 +1457,9 @@ const STATIC = new Map([
 
 const COMMON_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' data:",
+  // style-src 'unsafe-inline'：前端图表柱高/KPI 进度条靠内联 style 属性（height/width 百分比）——
+  // 无 unsafe-inline 时 CSP 会阻止全部内联样式（柱子 0 高不可见、进度条满宽假象，2026-11-21 实测踩坑）
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'",
 };
 
 const server = createServer((req, res) => {

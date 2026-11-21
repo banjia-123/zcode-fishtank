@@ -216,7 +216,10 @@ function renderOverview() {
     for (let h = 0; h < 24; h++) {
       const inNight = ss >= 0 && (ss <= se ? (h >= ss && h < se) : (h >= ss || h < se));
       const pct = (hours[h] / maxH) * 100;
-      bars += `<div class="bar ${inNight ? 'night-bar' : ''} ${hours[h] === 0 ? 'zero' : ''}" title="${hhmm(h)} · ${hours[h]} 次唤醒"><i style="height:${pct}%"></i></div>`;
+      // 柱高用像素内联（150px 容器，1%=1.5px；有数据至少 3px 可见）——
+      // 百分比高度在 grid 行高 auto + align-items:end 下会塌陷为 0（实测柱子全不可见的根因）
+      const px = Math.max(hours[h] > 0 ? 3 : 0, Math.round((hours[h] / maxH) * 150));
+      bars += `<div class="bar ${inNight ? 'night-bar' : ''} ${hours[h] === 0 ? 'zero' : ''}" title="${hhmm(h)} · ${hours[h]} 次唤醒"><i style="height:${px}px"></i></div>`;
     }
     $('#chart').innerHTML = (ss >= 0
       ? `<div class="night" style="left:calc(26px + ${(ss <= se ? ss : 0) / 24} * (100% - 26px)); width:calc(${(ss <= se ? se - ss : 24 - ss + se) / 24} * (100% - 26px))"></div>`
