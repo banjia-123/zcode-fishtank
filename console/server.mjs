@@ -852,6 +852,32 @@ function serveEmojiFile(name, res) {
   } catch { res.writeHead(404).end('not found'); }
 }
 
+// POST /api/emoji/gate {enabled}：表情硬闸开关（一键切换，写 config.emojiGate.enabled + 自动备份）
+// 闸门本体在适配器出站链（outbound.mjs 现读 config，切换即时生效无需重启）
+function apiEmojiGate(body) {
+  if (typeof body.enabled !== 'boolean') throw httpErr(400, 'E_BAD_PARAM', 'enabled 必须是布尔值');
+  let st;
+  try { st = configState(); } catch (e) { throw httpErr(500, 'E_IO', `config.json 读取失败：${e.message}`); }
+  const cfg = JSON.parse(st.raw);
+  cfg.emojiGate = { ...(cfg.emojiGate ?? {}), enabled: body.enabled };
+  const newRaw = JSON.stringify(cfg, null, 2) + '\n';
+  // 备份轮换（与两段式同款，10 份）
+  let backupId = null;
+  try {
+    mkdirSync(CONFIG_BACKUP_DIR, { recursive: true });
+    backupId = `config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    writeFileSync(join(CONFIG_BACKUP_DIR, backupId), st.raw, 'utf8');
+    const olds = readdirSync(CONFIG_BACKUP_DIR).filter((f) => f.startsWith('config-')).sort();
+    while (olds.length > 10) unlinkSync(join(CONFIG_BACKUP_DIR, olds.shift()));
+  } catch (e) { throw httpErr(500, 'E_IO', `备份失败（未写入）：${e.message}`); }
+  const tmp = CONFIG_PATH + '.tmp';
+  writeFileSync(tmp, newRaw, 'utf8');
+  try { JSON.parse(readFileSync(tmp, 'utf8')); } catch (e) { unlinkSync(tmp); throw httpErr(500, 'E_IO', `回读校验失败：${e.message}`); }
+  renameSync(tmp, CONFIG_PATH);
+  logConsoleOp('emoji_gate', { enabled: body.enabled });
+  return { enabled: body.enabled, backupId, note: '即时生效（适配器现读 config，无需重启）' };
+}
+
 // POST /api/emoji {name, dataBase64, desc, overwrite}：六道校验全过才写盘 + 同步补 index.json
 // （出站只做存在性校验，鱼"知道"这张图靠 index.json 的描述——上传必须双写）
 function apiEmojiUpload(body) {
@@ -1559,6 +1585,8 @@ const server = createServer((req, res) => {
         if (url === '/api/send/sessions' && req.method === 'GET') return route(() => apiSendSessions());
         if (url === '/api/send/preview' && req.method === 'POST') return route(() => readBody().then((b) => apiSendProxy(b, true)));
         if (url === '/api/send' && req.method === 'POST') return route(() => readBody().then((b) => apiSendProxy(b, false)));
+        if (url === '/api/emoji/gate' && req.method === 'GET') return route(() => ({ emoji: { enabled: (JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).emojiGate ?? {}).enabled !== false } }));
+        if (url === '/api/emoji/gate' && req.method === 'POST') return route(() => readBody().then(apiEmojiGate));
         if (url === '/api/emoji' && req.method === 'GET') return route(() => apiEmojiList(u.searchParams));
         if (url === '/api/emoji' && req.method === 'POST') return route(() => readBody().then(apiEmojiUpload));
         // 回收站三条路由必须在 /api/emoji/:name 图片流（emMatch）之前——否则 'trash' 被当文件名吃掉

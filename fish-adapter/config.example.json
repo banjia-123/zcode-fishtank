@@ -100,5 +100,10 @@
       "modelId": "GLM-5.3-Flash",
       "reasoningLevel": "low"
     }
+  },
+  "emojiGate": {
+    "enabled": true,
+    "window": 5,
+    "max": 2
   }
 }

@@ -1008,8 +1008,18 @@ const emState = { q: '', sort: 'usage' };
 
 async function loadEmoji() {
   const qs = new URLSearchParams({ sort: emState.sort, ...(emState.q ? { q: emState.q } : {}) });
-  const r = await api('/api/emoji?' + qs.toString());
+  const [r, g] = await Promise.all([
+    api('/api/emoji?' + qs.toString()),
+    api('/api/emoji/gate').catch(() => null), // 闸门状态（config.emojiGate，独立于表情列表）
+  ]);
   const d = r.data.emoji;
+  const gateBtn = $('#em-gate-btn');
+  if (gateBtn) {
+    const on = g?.data?.enabled;
+    gateBtn.textContent = on ? '🚦 硬闸 · 开' : '🚦 硬闸 · 关';
+    gateBtn.style.color = on ? '#6cc494' : '#8a959c';
+    gateBtn.dataset.on = on ? '1' : '0';
+  }
   if (d.state !== 'ready') {
     $('#em-strip').innerHTML = '';
     $('#emoji-grid').innerHTML = `<div class="wempty" style="grid-column:1/-1"><div class="na-box"><div class="t">表情库还没建</div><div class="d">fishpond/emojis 目录不存在或读不了。上传第一张也会自动建目录。</div></div></div>`;
@@ -1240,6 +1250,21 @@ $('#persona-save').addEventListener('click', async () => {
     toast('保存失败：' + e.message);
     if (String(e.message).includes('外部修改')) loadPersona(); // 基线冲突 → 重拉
   }
+});
+
+// 表情硬闸开关（G9b）：一键切换 config.emojiGate.enabled——适配器现读 config，即时生效无需重启
+$('#em-gate-btn').addEventListener('click', async () => {
+  const btn = $('#em-gate-btn');
+  const cur = btn.dataset.on === '1';
+  const next = !cur;
+  if (!confirm(next
+    ? '开启表情硬闸？\n同群最近 5 条发言已带 2 次表情时，本次回复的表情将降级为纯文本（即时生效，无需重启）。'
+    : '关闭表情硬闸？\n关闭后她可以按自己的节奏随意发表情（即时生效）。')) return;
+  try {
+    const r = await api('/api/emoji/gate', { method: 'POST', body: { enabled: next } });
+    toast(r.data.enabled ? '硬闸已开启（即时生效）' : '硬闸已关闭');
+    loadEmoji().catch(() => {});
+  } catch (e) { toast('切换失败：' + e.message); }
 });
 
 // 回收站模态交互
