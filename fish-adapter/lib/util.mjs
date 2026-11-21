@@ -1,5 +1,6 @@
 // 工具集：日志、审计、OneBot 消息文本化、属性转义、配置加载
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,11 +14,15 @@ export function log(tag, ...parts) {
   try { appendFileSync(join(LOG_DIR, 'adapter.log'), line + '\n'); } catch { /* 日志失败不阻断业务 */ }
 }
 
-// 审计告警：出站敏感信息命中、禁词命中。独立文件，排查误伤/泄露先看这里
-export function auditAlert(tag, ...parts) {
-  const line = `[${new Date().toISOString()}] [${tag}] ${parts.join(' ')}`;
+// 审计告警（D12 脱敏版）：出站敏感信息命中、禁词命中。
+// ⚠️ 任何情况下不写命中原文——审计日志自己不能成为泄露落点。只记 规则名 + 长度 + 6 位指纹，
+// 复核时拿 fp 去日志/信箱存档里对账那一条消息。
+export function auditAlert(kind, rule, raw, chatKey = '') {
+  const len = typeof raw === 'string' ? raw.length : 0;
+  const fp = createHash('sha1').update(String(raw)).digest('hex').slice(0, 6);
+  const line = `[${new Date().toISOString()}] [${kind}] rule=${rule} len=${len} fp=${fp} chat=${chatKey}`;
   console.error('[AUDIT] ' + line);
-  try { appendFileSync(join(LOG_DIR, 'audit.log'), line + '\n'); } catch { /* 同上 */ }
+  try { appendFileSync(join(LOG_DIR, 'audit.log'), line + '\n'); } catch { /* 日志失败不阻断 */ }
 }
 
 // OneBot v11 message → 纯文本（段数组为主，兼容 CQ 码字符串格式）

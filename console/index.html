@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>鱼缸控制台</title>
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/style.css?v=g8">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark"><svg fill="none" height="13" viewBox="0 0 16 16" width="13"><path d="M2 5.5h12M2 8.5h12M2 11.5h7" stroke="#3fb0a6" stroke-linecap="round" stroke-width="1.2"/></svg></span>
+      <b>鱼缸控制台</b><span>v0.3 · G3</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="pills" id="pills">
+      <span class="pill" id="pill-adapter"><i class="dot"></i>适配器 <b>…</b></span>
+      <span class="pill" id="pill-patrol"><i class="dot"></i>巡逻 <b>…</b></span>
+    </div>
+    <button class="mode-switch" id="modeSwitch" title="点击上线 / 下线">
+      <span class="track"><i></i></span>
+      <span class="mlabel" id="modeLabel">…</span>
+    </button>
+    <span class="livehint" id="refreshHint">—</span>
+    <span class="clock mono" id="clock">--:--:--</span>
+  </header>
+
+  <nav class="sidenav">
+    <div class="nav-item active" data-page="overview">总览</div>
+    <div class="nav-item" data-page="wakes">工作日志</div>
+    <div class="nav-item" data-page="review">审阅</div>
+    <div class="nav-item" data-page="memory">记忆与行话</div>
+    <div class="nav-sep"></div>
+    <div class="nav-item" data-page="config">配置</div>
+    <div class="nav-item" data-page="send">测试发送</div>
+    <div class="nav-item" data-page="emoji">表情包</div>
+    <div class="nav-item" data-page="ops">运维</div>
+    <div class="nav-item" data-page="automations">自动化任务</div>
+    <div class="nav-foot">
+      <code>127.0.0.1:3201</code><br>
+      独立进程 · 零依赖 · 只读骨架<br>
+      <span style="color:#3f4f58">本控制台不会结束 QQ 进程</span>
+    </div>
+  </nav>
+
+  <main class="main">
+
+    <!-- ================= 总览（G3 交付） ================= -->
+    <section class="page" id="page-overview">
+      <div class="page-head">
+        <div>
+          <h1>总览</h1>
+          <div class="sub" id="ov-sub">数据加载中…</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn ghost" id="btn-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div class="banner hidden" id="ov-banner">
+        <span class="bar"></span><span id="ov-banner-text"></span>
+      </div>
+
+      <div class="kpis" id="kpis">
+        <!-- 8 张 KPI 卡由 app.js 渲染 -->
+      </div>
+
+      <div class="ov-bottom">
+        <div class="card">
+          <div class="card-head"><h2>今日唤醒量</h2><span class="hint">按小时 · 静默时段 <span id="ov-sh">—</span></span></div>
+          <div class="chart-wrap">
+            <div class="chart" id="chart"></div>
+            <div class="xaxis" id="xaxis"></div>
+            <div class="legend"><i style="background:#48bdb2"></i>唤醒<i style="background:#2f6d80;margin-left:12px"></i>静默时段内<i style="background:#1e2a30;margin-left:12px"></i>无</div>
+          </div>
+        </div>
+        <div class="side-col">
+          <div class="card side-card" id="side-quotas">
+            <div class="card-head"><h2>额度钱包</h2></div>
+            <div class="card-body" id="quotas-body"></div>
+          </div>
+          <div class="card side-card">
+            <div class="card-head"><h2>队列</h2></div>
+            <div class="card-body" id="queues-body"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-head"><h2>最近唤醒流水</h2><span class="hint">最近 10 条 · 触发消息原文不落盘（审计红线）</span></div>
+        <table class="fixed">
+          <thead><tr><th>时间</th><th>会话</th><th>条数</th><th>耗时</th><th>结果</th><th>段数</th><th>备注</th></tr></thead>
+          <tbody id="recent-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ================= 其余页面占位（G4 起逐组交付） ================= -->
+    <!-- ================= 工作日志（G4 交付） ================= -->
+    <section class="page hidden" id="page-wakes">
+      <div class="page-head">
+        <div>
+          <h1>工作日志</h1>
+          <div class="sub" id="wk-sub">每次唤醒一行 · 展开看全部字段</div>
+        </div>
+        <div class="page-actions">
+          <input type="date" id="wk-date" class="date-input">
+          <select id="wk-chat"><option value="">全部会话</option></select>
+          <select id="wk-result">
+            <option value="">全部结果</option>
+            <option value="sent">已回</option>
+            <option value="silent">沉默</option>
+            <option value="timeout">超时</option>
+            <option value="error">错误</option>
+            <option value="skipped">拦截</option>
+          </select>
+          <button class="btn ghost" id="wk-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div class="stats" id="wk-stats"></div>
+
+      <div class="card">
+        <div class="card-head"><h2>唤醒记录</h2><span class="hint" id="wk-hint">触发消息原文不落盘（审计红线），可在总览便签近似回放</span></div>
+        <div class="wlist" id="wk-list"></div>
+      </div>
+    </section>
+    <!-- ================= 审阅（G5 交付） ================= -->
+    <section class="page hidden" id="page-review">
+      <div class="page-head">
+        <div>
+          <h1>审阅</h1>
+          <div class="sub" id="rv-sub">候选裁决 · 只批不编（人工闸门，批准即生效并自动备份）</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn ghost" id="rv-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div id="rv-result" class="hidden"></div>
+
+      <div class="rev-grid">
+        <div class="rev-col card">
+          <div class="card-head"><h2>记忆候选</h2><span class="hint" id="rv-m-cnt">—</span></div>
+          <div class="rev-list" id="rv-memory"></div>
+        </div>
+        <div class="rev-col card">
+          <div class="card-head"><h2>行话候选</h2><span class="hint" id="rv-v-cnt">—</span></div>
+          <div class="rev-list" id="rv-vocab"></div>
+        </div>
+      </div>
+
+      <div class="rev-bar card">
+        <span class="selinfo" id="rv-sel">未选择</span>
+        <div class="right">
+          <button class="btn danger" id="rv-reject" disabled>驳回选中</button>
+          <button class="btn primary" id="rv-approve" disabled>批准选中</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 记忆与行话（G5 交付） ================= -->
+    <section class="page hidden" id="page-memory">
+      <div class="page-head">
+        <div>
+          <h1>记忆与行话</h1>
+          <div class="sub" id="mem-sub">已生效条目 · 只读（想改走审阅，这是人工记忆闸门）</div>
+        </div>
+        <div class="page-actions">
+          <div class="seg" id="mem-seg">
+            <button data-k="memory" class="on">记忆</button>
+            <button data-k="vocab">行话</button>
+          </div>
+          <input class="search" id="mem-search" placeholder="搜索…">
+          <button class="btn ghost" id="mem-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div id="mem-strip" class="mem-strip"></div>
+      <div class="card"><div class="mem-list" id="mem-list"></div></div>
+    </section>
+    <!-- ================= 配置（G6 交付） ================= -->
+    <section class="page hidden" id="page-config">
+      <div class="page-head">
+        <div>
+          <h1>配置</h1>
+          <div class="sub" id="cfg-sub">两段式：改表单 → 预览 diff → 30 秒内确认应用（自动备份 10 份）</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn ghost" id="cfg-reload">放弃修改并重载</button>
+          <button class="btn primary" id="cfg-preview">预览变更</button>
+        </div>
+      </div>
+
+      <div class="banner hidden" id="cfg-banner"></div>
+
+      <div class="cfg-grid" id="cfg-forms"></div>
+
+      <div class="card" style="margin-top:12px" id="persona-card">
+        <div class="card-head"><h2>人格卡（persona.md）</h2><span class="hint">保存即生效（唤醒时现读盘，无需重启）· 自动 .bak 备份</span></div>
+        <div class="card-body">
+          <textarea id="persona-text" class="persona-edit" spellcheck="false" placeholder="加载中…"></textarea>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+            <span class="send-meta" id="persona-meta"></span>
+            <span style="flex:1"></span>
+            <button class="btn ghost" id="persona-reload">放弃修改</button>
+            <button class="btn primary" id="persona-save" disabled>保存人格（立即生效）</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 配置 diff 预览模态（两段式第二步） -->
+    <div class="modal-mask hidden" id="cfg-modal">
+      <div class="modal">
+        <div class="modal-head"><h3>确认应用以下变更</h3><span class="x" id="cfg-modal-x">×</span></div>
+        <div class="modal-body">
+          <div id="cfg-diff"></div>
+          <div id="cfg-warnings"></div>
+          <div class="cfg-countdown mono" id="cfg-countdown"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" id="cfg-cancel">取消</button>
+          <button class="btn primary" id="cfg-apply">应用并写入（备份后落盘）</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 上下线确认模态 -->
+    <div class="modal-mask hidden" id="mode-modal">
+      <div class="modal">
+        <div class="modal-head"><h3 id="mode-title">上线</h3><span class="x" id="mode-modal-x">×</span></div>
+        <div class="modal-body" id="mode-body"></div>
+        <div class="modal-foot">
+          <button class="btn ghost" id="mode-cancel">取消</button>
+          <button class="btn primary" id="mode-go">执行</button>
+        </div>
+      </div>
+    </div>
+    <!-- ================= 测试发送（G7 交付） ================= -->
+    <section class="page hidden" id="page-send">
+      <div class="page-head">
+        <div>
+          <h1>测试发送</h1>
+          <div class="sub">走完整出站链（禁词 → 审计 → 限额 → 分段）——拦了就置灰，不许绕</div>
+        </div>
+      </div>
+      <div class="card" id="send-card">
+        <div class="card-body" id="send-body">
+          <div class="frow"><div class="flabel">发给谁</div><div><select id="send-chat"></select></div></div>
+          <div class="frow"><div class="flabel">内容<small>最多 500 字，与真发完全同链</small></div><div><textarea id="send-text" maxlength="500" placeholder="想发什么就写什么——预检不花钱不发送，真发计入额度并进聊天记录"></textarea></div></div>
+          <div class="frow"><div class="flabel"></div><div style="display:flex;gap:8px">
+            <button class="btn" id="send-preview">① 预检（干跑）</button>
+            <button class="btn primary" id="send-go" disabled>② 真发送（计入额度）</button>
+          </div></div>
+          <div id="send-result"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 表情包（G7 交付） ================= -->
+    <section class="page hidden" id="page-emoji">
+      <div class="page-head">
+        <div>
+          <h1>表情包</h1>
+          <div class="sub" id="em-sub">浏览 / 上传 / 删除（进回收站）· 上传会同步补选图索引</div>
+        </div>
+        <div class="page-actions">
+          <input class="search" id="em-search" placeholder="搜索文件名/描述…">
+          <div class="seg" id="em-sort">
+            <button data-k="usage" class="on">按使用</button>
+            <button data-k="name">按名称</button>
+          </div>
+          <button class="btn" id="em-trash-btn">回收站</button>
+          <button class="btn primary" id="em-upload-btn">+ 上传</button>
+        </div>
+      </div>
+      <div class="mem-strip" id="em-strip"></div>
+      <div class="emoji-grid" id="emoji-grid"></div>
+      <div class="emoji-foot" id="emoji-foot"></div>
+    </section>
+
+    <!-- 回收站模态 -->
+    <div class="modal-mask hidden" id="trash-modal">
+      <div class="modal" style="width:600px">
+        <div class="modal-head"><h3>表情包回收站</h3><span class="x" id="trash-modal-x">×</span></div>
+        <div class="modal-body">
+          <div id="trash-list" style="max-height:52vh;overflow-y:auto"></div>
+          <div class="cfg-countdown" id="trash-hint"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 上传模态 -->
+    <div class="modal-mask hidden" id="em-modal">
+      <div class="modal">
+        <div class="modal-head"><h3>上传表情包</h3><span class="x" id="em-modal-x">×</span></div>
+        <div class="modal-body">
+          <div class="frow"><div class="flabel">图片<small>≤5MB · png/jpg/gif/webp · 服务端校验文件头（改名的 exe 不行）</small></div><div><input type="file" id="em-file" accept=".png,.jpg,.jpeg,.gif,.webp"></div></div>
+          <div class="frow"><div class="flabel">何时用这张（描述）<small>这是鱼的"选图知识"——留空她就不太知道什么时候用</small></div><div><textarea id="em-desc" placeholder="例：被怼得没话说时掏出来糊弄"></textarea></div></div>
+          <div class="frow"><div class="flabel">覆盖同名<small>勾选后旧图进回收站</small></div><div class="bool-row"><input type="checkbox" id="em-overwrite"><span>允许覆盖</span></div></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn ghost" id="em-cancel">取消</button>
+          <button class="btn primary" id="em-upload-go" disabled>上传</button>
+        </div>
+      </div>
+    </div>
+    <!-- ================= 自动化任务（学习/日记按钮手动触发，模型在配置页设置） ================= -->
+    <section class="page hidden" id="page-automations">
+      <div class="page-head">
+        <div>
+          <h1>自动化任务</h1>
+          <div class="sub" id="am-sub">学习 / 写日记为按钮手动触发——不按不跑；模型在配置页「脑子（模型）」组设置</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn ghost" id="am-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div class="ops-grid">
+        <div class="card">
+          <div class="card-head"><h2>学习任务</h2><span class="hint" id="am-learn-badge"></span></div>
+          <div class="card-body">
+            <div id="am-learn-status"></div>
+            <div style="margin-top:10px"><button class="btn primary" id="am-learn-go">▶ 立即学习（读积压消息，攒行话候选）</button></div>
+            <div style="margin-top:6px;font-size:10.5px;color:#54656e" id="am-learn-model">生效模型：—</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>日记任务</h2><span class="hint" id="am-diary-badge"></span></div>
+          <div class="card-body">
+            <div id="am-diary-status"></div>
+            <div style="margin-top:10px"><button class="btn primary" id="am-diary-go">✎ 写今日日记（吐槽今天的群聊）</button></div>
+            <div style="margin-top:6px;font-size:10.5px;color:#54656e" id="am-diary-model">生效模型：—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="am-backlog" style="margin-top:12px"></div>
+      <div class="card" id="am-diary-backlog" style="margin-top:12px"></div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-head"><h2>日记列表</h2><span class="hint" id="am-diary-hint"></span></div>
+        <div class="mem-list" id="diary-list"></div>
+        <div class="card-body hidden" id="diary-reader">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <b id="diary-reader-name"></b>
+            <span style="flex:1"></span>
+            <button class="btn sm ghost" id="diary-reader-close">关闭阅读</button>
+          </div>
+          <div id="diary-reader-body" class="diary-body"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-head"><h2>库内剩余 automation</h2><span class="hint">定时条目移除后这里应为空</span></div>
+      </div>
+    </section>
+
+    <!-- ================= 运维（G8 交付） ================= -->
+    <section class="page hidden" id="page-ops">
+      <div class="page-head">
+        <div>
+          <h1>运维</h1>
+          <div class="sub" id="ops-sub">进程 / 额度 / 会话清理 / 操作流水</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn ghost" id="ops-refresh">刷新</button>
+        </div>
+      </div>
+
+      <div class="ops-grid">
+        <div class="card">
+          <div class="card-head"><h2>进程</h2><span class="hint" id="ops-proc-hint"></span></div>
+          <div class="card-body" id="ops-proc"></div>
+        <div class="card-body" style="border-top:1px solid var(--line);padding-top:10px">
+          <button class="btn danger" id="ops-shutdown">关闭控制台</button>
+          <span class="send-meta" style="margin-left:8px">关的是控制台进程；鱼若在线会<b>先自动下线</b>再退出。崩溃/强杀不影响鱼。桌面图标可随时拉起。</span>
+        </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>额度钱包</h2></div>
+          <div class="card-body" id="ops-quota"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-head"><h2>会话清理</h2><span class="hint">清掉鱼缸在 ZCode 里的残缺会话条目（删前归档）</span></div>
+        <div class="card-body">
+          <div style="font-size:10.5px;color:#54656e;line-height:1.7;margin-bottom:10px">
+            防漏网兜底：秒回时代的唤醒会话是一次性无头会话，<b>不进</b> ZCode 任务库，所以预览<b>平时恒为 0 属正常</b>。
+            哪天预览数字动了，说明 ZCode 行为有变（无头会话开始落库），届时再执行清理即可。识别条件只匹配鱼缸工作区与自动化标记，不会误伤你自己的工作会话。
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn" id="prune-preview">① 预览（只读）</button>
+            <button class="btn danger" id="prune-go" disabled>② 执行清理（删除不可逆）</button>
+            <span class="send-meta" id="prune-out" style="margin-left:8px"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-head"><h2>操作流水</h2><span class="hint">最近 20 条 · ops.jsonl（脚本与控制台共写）</span></div>
+        <table class="fixed">
+          <thead><tr><th>时间</th><th>来源</th><th>动作</th><th>结果</th><th>耗时</th><th>详情</th></tr></thead>
+          <tbody id="ops-body"></tbody>
+        </table>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <div class="card-body" style="display:flex;gap:10px;align-items:center">
+          <span class="send-meta">日志目录：fish-adapter/logs（adapter / wake / audit / speak）</span>
+          <button class="btn" id="ops-open-logs">打开日志目录</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+<noscript style="color:#d7e2e8;background:#151d22;display:block;padding:20px">本控制台需要启用 JavaScript（纯本地渲染，无任何外部资源）。</noscript>
+<script src="/app.js?v=g7e"></script>
+</body>
+</html>

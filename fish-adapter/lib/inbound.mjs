@@ -1,8 +1,10 @@
 // 入站链路（规格 §4.2/§4.3）：
 // ① 自身过滤 → ② 白名单 → ③ 去重 → 管理命令拦截 → ④ 引用解析 → ⑤ @ 判断 → ⑥ 组装报文 → POST ZCode
-import { plainText, escapeAttr, log, collectImages, guessImageExt, extractAppCards } from './util.mjs';
+import { plainText, escapeAttr, log, collectImages, guessImageExt, extractAppCards, ROOT_DIR } from './util.mjs';
 import { writeInboxFile, bridgeDirs } from './bridge.mjs';
-import { appendFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
+import { detectNameTier, isNameMuted } from './name-tier.mjs';
+import { appendNote } from './sticky.mjs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 // chat.jsonl（v3 §4 学习素材）：白名单内消息全量留档（脱敏：记昵称与文本，截断 200 字）
@@ -20,14 +22,41 @@ function recordChat(cfg, event, text) {
 }
 
 // —— ③ 去重：message_id 去重表，TTL 5 分钟（OneBot 在 WS 重连时会重放事件）——
+// D4 · 落盘（state/seen.jsonl，append 模式）：进程重启/崩溃重拉后重投的事件不再被当成新消息。
+// 每 10 分钟压实一次（临时文件 + rename，防半截文件）；启动读回时按 ts 过滤，不把过期记录塞进内存
 const seen = new Map(); // message_id -> ts
 const DEDUP_TTL = 5 * 60 * 1000;
+const SEEN_FILE = join(ROOT_DIR, 'state', 'seen.jsonl');
+try {
+  for (const line of readFileSync(SEEN_FILE, 'utf8').split('\n')) {
+    if (!line.trim()) continue;
+    try { const o = JSON.parse(line); if (Date.now() - o.ts < DEDUP_TTL) seen.set(o.id, o.ts); } catch { /* 跳过坏行 */ }
+  }
+  if (seen.size) log('inbound', `dedup restored: ${seen.size} 条（重启防重发）`);
+} catch { /* 首次运行无此文件 */ }
+try { mkdirSync(join(ROOT_DIR, 'state'), { recursive: true }); } catch { /* 已存在 */ }
+function persistSeen(id) {
+  try { appendFileSync(SEEN_FILE, JSON.stringify({ id, ts: Date.now() }) + '\n', 'utf8'); } catch { /* 落盘失败不阻断 */ }
+}
+function compactSeen() {
+  try {
+    const now = Date.now();
+    const keep = [];
+    for (const [k, t] of seen) if (now - t < DEDUP_TTL) keep.push(JSON.stringify({ id: k, ts: t }));
+    const tmp = SEEN_FILE + '.tmp';
+    writeFileSync(tmp, keep.join('\n') + (keep.length ? '\n' : ''), 'utf8');
+    renameSync(tmp, SEEN_FILE);
+  } catch { /* 压实失败下次再试 */ }
+}
+setInterval(compactSeen, 10 * 60 * 1000).unref?.();
+
 function isDuplicate(id) {
   if (id == null) return false;
   const now = Date.now();
   for (const [k, t] of seen) if (now - t > DEDUP_TTL) seen.delete(k);
   if (seen.has(id)) return true;
   seen.set(id, now);
+  persistSeen(id);
   return false;
 }
 
@@ -153,7 +182,7 @@ async function attachCards(cfg, event, text) {
   return out;
 }
 
-export function createInbound(cfg, onebot) {
+export function createInbound(cfg, onebot, patrol = null) {
   // chatKey -> { lastInboundAt }，供出站限额区分"回复"与"主动消息"
   const state = new Map();
   const nonMustLast = new Map(); // chatKey -> ts，热闹时非必回消息的投递节流
@@ -169,9 +198,10 @@ export function createInbound(cfg, onebot) {
     // ① 自身消息过滤：不做这步，鱼会自己跟自己聊到天荒地老
     if (String(event.user_id) === selfId) return;
 
-    // ② 白名单（fail-closed）
+    // ② 白名单（fail-closed）。私聊被拒单独措辞（S3.2）：不唤醒、不记便签，日志便于发现骚扰
     if (!allowed(cfg, event)) {
-      log('inbound', `dropped (not allowed): ${event.message_type} ${event.group_id ?? event.user_id}`);
+      if (event.message_type === 'private') log('inbound', `private-reject uid=${event.user_id}（不在 allow.private 白名单，不唤醒不记便签）`);
+      else log('inbound', `dropped (not allowed): ${event.message_type} ${event.group_id ?? event.user_id}`);
       return;
     }
 
@@ -210,16 +240,20 @@ export function createInbound(cfg, onebot) {
     const text2 = renderAt(await attachCards(cfg, event, await attachImages(cfg, event, text)));
     if (reply) reply.text = renderAt(reply.text);
 
-    // ⑤ @ / 名字判断（botName 为空时跳过名字匹配，防 includes('') 恒真）
+    // ⑤ @ / 名字判断（S2.6 三档）：@、引用自己、名字边界命中 = 必回；名字在句中 = 软唤醒；
+    //    屏蔽短语（伊丽莎白圈/伊莎贝拉…）= 不触发。私聊一律 tier1——一对一里说话就是在叫她
     const segs = Array.isArray(event.message) ? event.message : [];
     const atMe = segs.some((s) => s.type === 'at' && String(s.data?.qq) === selfId);
-    const nameHit = cfg.botName ? text.includes(cfg.botName) : false;
-    const mustReply = atMe || nameHit || Boolean(reply?.isSelf);
+    const hit = atMe || !isGroup
+      ? { tier: 1, name: null }
+      : detectNameTier(text, cfg.identity?.names ?? (cfg.botName ? [cfg.botName] : []), cfg.identity?.blockPhrases ?? []);
+    const mustReply = atMe || Boolean(reply?.isSelf) || hit.tier === 1;
+    const nameMuted = hit.tier === 2 && isNameMuted(chatKey); // 退避期：tier2 不作为唤醒触发（S2-E 的 flush 决策用）
 
-    // P1 场合闸门：热闹降级 + 非必回节流（必回消息不设限）
+    // P1 场合闸门：热闹降级 + 非必回节流（必回消息不设限；S3.2：私聊关闭——一对一没有「热闹」这回事）
     bumpWindow(chatKey, event.user_id, cfg);
     const throttleMs = cfg.p1?.nonMustThrottleMs ?? 120_000;
-    if (!mustReply && !adminHit) {
+    if (isGroup && !mustReply && !adminHit) {
       const lastNonMust = nonMustLast.get(chatKey) ?? 0;
       if (isBusy(chatKey, cfg) && Date.now() - lastNonMust < throttleMs) {
         log('inbound', `dropped (busy-throttle): ${chatKey} msg=${event.message_id}（热闹中，非必回节流）`);
@@ -267,13 +301,28 @@ export function createInbound(cfg, onebot) {
       displayName: senderName,
       messageId: String(event.message_id),
       must: mustReply,
+      nameTier: hit.tier,          // S2.6：0/1/2，供 patrol flush 与 wake 决策
+      ...(hit.name ? { nameHit: hit.name } : {}),
+      ...(nameMuted ? { nameMuted: true } : {}), // 退避期 tier2 静音标记
       text: head,
     };
+    const tierTag = ` tier=${hit.tier}${hit.name ? `(${hit.name})` : ''}${nameMuted ? '[muted]' : ''}`;
 
-    // 投递：file 桥模式写 inbox（规格 §9 兜底），webhook 模式 POST ZCode
-    if (cfg.bridge?.mode === 'file') {
+    // 投递三分支：patrol（新链路，S2-B）/ file 桥（老链路）/ webhook（老链路）
+    // patrol 模式：push 进该群缓冲（攒批窗口在 peer.mjs），inbox 只留档不进索引——
+    // 信箱任务不消费这批消息，防双回复；文件留着做失败重放与回滚
+    if (patrol) {
+      writeInboxFile(cfg, payload, { archive: true });
+      // S3.1 便签：收到就 append（纯本地不调模型）——patrol 开时才记（老链路无消费者）
+      appendNote(chatKey, isGroup ? 'group' : 'private', { from: senderName, uid: String(event.user_id), text });
+      patrol.push(chatKey, {
+        ...payload,
+        time: Number(event.time) || Math.floor(Date.now() / 1000), // QQ 秒级时间戳（D9 排序用）
+      });
+      log('inbound', `→ patrol (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${tierTag}${adminHit ? ' admin' : ''})`);
+    } else if (cfg.bridge?.mode === 'file') {
       writeInboxFile(cfg, payload);
-      log('inbound', `→ inbox (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${adminHit ? ' admin' : ''})`);
+      log('inbound', `→ inbox (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${tierTag}${adminHit ? ' admin' : ''})`);
     } else {
       try {
         const res = await fetch(cfg.zcode.callbackUrl, {
@@ -285,7 +334,7 @@ export function createInbound(cfg, onebot) {
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(15_000),
         });
-        log('inbound', `→ ZCode ${res.status} (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${adminHit ? ' admin' : ''})`);
+        log('inbound', `→ ZCode ${res.status} (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${tierTag}${adminHit ? ' admin' : ''})`);
       } catch (e) {
         log('inbound', `POST ZCode failed (${chatKey} msg=${event.message_id}): ${e.message}`);
       }

@@ -13,6 +13,11 @@ export class OneBotClient {
 
   start() { this._connect(); }
 
+  // 与 NapCat 的 WS 是否已连接（readyState===OPEN）——控制台"鱼已上线"的判定信号
+  get connected() {
+    return Boolean(this.ws && this.ws.readyState === 1 && !this.stopped);
+  }
+
   _connect() {
     if (this.stopped) return;
     const { wsUrl, accessToken } = this.cfg.onebot;

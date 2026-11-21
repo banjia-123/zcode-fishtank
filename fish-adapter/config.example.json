@@ -2,13 +2,8 @@
   "onebot": {
     "wsUrl": "ws://127.0.0.1:3001",
     "httpUrl": "http://127.0.0.1:3000",
-    "accessToken": "<自生成强随机token，与NapCat onebot11配置保持一致>",
+    "accessToken": "<自生成强随机token>",
     "selfId": "<鱼QQ号>"
-  },
-  "zcode": {
-    "callbackUrl": "http://127.0.0.1:<ZCode入站端口>/api/bots/webhook",
-    "botId": "bot-fish-001",
-    "secret": ""
   },
   "listen": {
     "port": 3200
@@ -16,14 +11,49 @@
   "bridge": {
     "mode": "file"
   },
-  "botName": "<鱼名，如：小满>",
+  "botName": "<鱼名>",
+  "identity": {
+    "names": [
+      "<鱼名>",
+      "<鱼名简称>"
+    ],
+    "blockPhrases": [
+      "伊丽莎白圈",
+      "伊丽莎白瓜",
+      "伊丽莎白二世",
+      "伊丽莎白女王",
+      "伊丽莎白·泰勒",
+      "伊莎贝拉",
+      "伊莎贝尔",
+      "伊莎多拉"
+    ]
+  },
   "p1": {
     "busyWindowMs": 300000,
     "busyMsgThreshold": 10,
     "busyUserThreshold": 3,
     "nonMustThrottleMs": 120000,
     "staleMinutes": 10,
-    "maxPendingPerPoll": 10
+    "maxPendingPerPoll": 6
+  },
+  "patrol": {
+    "enabled": true,
+    "cliPath": "D:/Program Files (x86)/ZCode/resources/glm/zcode.cjs",
+    "batchWindowMs": 5000,
+    "mustWindowMs": 1500,
+    "maxBufferPerPeer": 30,
+    "bufferStaleMs": 30000,
+    "minWakeIntervalMs": 20000,
+    "silentHours": {
+      "start": "01:00",
+      "end": "07:00"
+    },
+    "maxDailyWakes": 200,
+    "model": {
+      "providerId": "bigmodel-standard-api",
+      "modelId": "GLM-5.3-Flash",
+      "reasoningLevel": "low"
+    }
   },
   "allow": {
     "groups": [
@@ -35,11 +65,18 @@
     "allowAllWhenEmpty": false
   },
   "ownerQQ": "<你的QQ号>",
+  "private": {
+    "maxPerDay": 30
+  },
+  "maintenance": {
+    "pruneAfterMin": 40,
+    "activeGraceMin": 10
+  },
   "limits": {
     "maxRepliesPerMessage": 2,
     "maxProactivePerGroupPerMinute": 1,
-    "maxDailyTotal": 200,
-    "maxRepliesPerGroupPer5Min": 5,
+    "maxDailyTotal": 400,
+    "maxRepliesPerGroupPer5Min": 8,
     "maxWindow5MinMs": 300000,
     "maxSegments": 4,
     "busyMaxSegments": 2,
@@ -48,5 +85,20 @@
   "bannedWords": [],
   "audit": {
     "blockPrivateIP": false
+  },
+  "console": {
+    "token": "<自生成强随机token-控制台用，可与上同>"
+  },
+  "tasks": {
+    "learnModel": {
+      "providerId": "bigmodel-standard-api",
+      "modelId": "GLM-5.3-Flash",
+      "reasoningLevel": "low"
+    },
+    "diaryModel": {
+      "providerId": "bigmodel-standard-api",
+      "modelId": "GLM-5.3-Flash",
+      "reasoningLevel": "low"
+    }
   }
 }

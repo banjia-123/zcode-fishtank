@@ -77,11 +77,52 @@ function killNapCat() {
 
 let failStreak = 0;      // 连续失败轮数
 let restarting = false;
+
+// —— 适配器守护（2026-11-21 补缺口）：适配器单进程崩 = 鱼静默下线无人拉——
+// 探 TCP 3200（1.5s 超时），NapCat 在线 && 适配器死（双轮确认）→ 直接拉起 node adapter.mjs。
+// 与鱼下线无冲突：下线脚本连 watchdog 一起关，不会出现"下线后被复活"。
+let adapterFailStreak = 0;
+let adapterStarting = false;
+function adapterAliveOnce() {
+  return new Promise((resolve) => {
+    import('node:net').then(({ createConnection }) => {
+      const sock = createConnection({ host: '127.0.0.1', port: 3200, timeout: 1500 });
+      sock.once('connect', () => { sock.destroy(); resolve(true); });
+      sock.once('timeout', () => { sock.destroy(); resolve(false); });
+      sock.once('error', () => { sock.destroy(); resolve(false); });
+    }).catch(() => resolve(false));
+  });
+}
+async function checkAdapter() {
+  if (adapterStarting) return;
+  if (await adapterAliveOnce()) {
+    if (adapterFailStreak > 0) log('适配器恢复在线');
+    adapterFailStreak = 0;
+    return;
+  }
+  adapterFailStreak += 1;
+  log(`适配器端口 3200 无响应（连续第 ${adapterFailStreak} 轮）`);
+  if (adapterFailStreak < 2) return; // 防抖一轮
+  // NapCat 不在线时不拉适配器——整机下线场景走 NapCat 拉起流程（适配器随上线脚本恢复）
+  if (!(await aliveOnce())) { log('适配器无响应但 NapCat 也不在线——判定整机下线，不拉'); return; }
+  adapterStarting = true;
+  log('确认适配器死亡，拉起…');
+  try {
+    spawn(NODE, [join(HERE, '..', 'fish-adapter', 'adapter.mjs')], {
+      cwd: join(HERE, '..', 'fish-adapter'),
+      detached: true,
+      stdio: 'ignore',
+    }).unref();
+  } catch (e) { log(`适配器拉起失败: ${e.message}`); }
+  setTimeout(() => { adapterStarting = false; adapterFailStreak = 0; log('适配器恢复检查'); }, 15_000);
+}
+
 async function check() {
   if (restarting) return;
   if (await alive()) {
     if (failStreak > 0) log('恢复在线');
     failStreak = 0;
+    await checkAdapter(); // NapCat 在线的前提下检查适配器
     return;
   }
   failStreak += 1;
@@ -105,6 +146,6 @@ async function check() {
   setTimeout(() => { restarting = false; failStreak = 0; log('恢复检查'); }, 70_000);
 }
 
-log('watchdog v2 启动（60 秒周期，双轮确认才拉起）');
+log('watchdog v3.1 启动（60 秒周期，双轮确认才拉起；含适配器 TCP 守护）');
 await check();
 setInterval(check, 60_000);
