@@ -1019,6 +1019,10 @@ async function loadEmoji() {
     gateBtn.textContent = on ? '🚦 硬闸 · 开' : '🚦 硬闸 · 关';
     gateBtn.style.color = on ? '#6cc494' : '#8a959c';
     gateBtn.dataset.on = on ? '1' : '0';
+    const gw = document.getElementById('em-gate-window');
+    const gm = document.getElementById('em-gate-max');
+    if (gw && g?.data?.window) gw.value = g.data.window;
+    if (gm && g?.data?.max) gm.value = g.data.max;
   }
   if (d.state !== 'ready') {
     $('#em-strip').innerHTML = '';
@@ -1261,10 +1265,25 @@ $('#em-gate-btn').addEventListener('click', async () => {
     ? '开启表情硬闸？\n同群最近 5 条发言已带 2 次表情时，本次回复的表情将降级为纯文本（即时生效，无需重启）。'
     : '关闭表情硬闸？\n关闭后她可以按自己的节奏随意发表情（即时生效）。')) return;
   try {
-    const r = await api('/api/emoji/gate', { method: 'POST', body: { enabled: next } });
+    const gw = Number(document.getElementById('em-gate-window')?.value ?? 5);
+    const gm = Number(document.getElementById('em-gate-max')?.value ?? 2);
+    const r = await api('/api/emoji/gate', { method: 'POST', body: { enabled: next, window: gw, max: gm } });
     toast(r.data.enabled ? '硬闸已开启（即时生效）' : '硬闸已关闭');
     loadEmoji().catch(() => {});
   } catch (e) { toast('切换失败：' + e.message); }
+});
+
+// 硬闸阈值数字自定义（change 即保存，即时生效）
+['em-gate-window', 'em-gate-max'].forEach((id) => {
+  document.getElementById(id)?.addEventListener('change', async (e) => {
+    const body = id === 'em-gate-window'
+      ? { window: Number(e.target.value), max: Number(document.getElementById('em-gate-max')?.value ?? 2) }
+      : { max: Number(e.target.value), window: Number(document.getElementById('em-gate-window')?.value ?? 5) };
+    try {
+      await api('/api/emoji/gate', { method: 'POST', body });
+      toast('阈值已更新（即时生效）');
+    } catch (err) { toast('保存失败：' + err.message); loadEmoji().catch(() => {}); }
+  });
 });
 
 // 回收站模态交互

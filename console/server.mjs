@@ -855,11 +855,16 @@ function serveEmojiFile(name, res) {
 // POST /api/emoji/gate {enabled}：表情硬闸开关（一键切换，写 config.emojiGate.enabled + 自动备份）
 // 闸门本体在适配器出站链（outbound.mjs 现读 config，切换即时生效无需重启）
 function apiEmojiGate(body) {
-  if (typeof body.enabled !== 'boolean') throw httpErr(400, 'E_BAD_PARAM', 'enabled 必须是布尔值');
+  const hasEnabled = typeof body.enabled === 'boolean';
+  const hasWindow = body.window != null;
+  const hasMax = body.max != null;
+  if (!hasEnabled && !hasWindow && !hasMax) throw httpErr(400, 'E_BAD_PARAM', '需要 enabled / window / max 至少一项');
+  if (hasWindow && (!Number.isInteger(Number(body.window)) || Number(body.window) < 2 || Number(body.window) > 50)) throw httpErr(400, 'E_BAD_PARAM', 'window 必须是 2~50 的整数');
+  if (hasMax && (!Number.isInteger(Number(body.max)) || Number(body.max) < 1 || Number(body.max) > 30)) throw httpErr(400, 'E_BAD_PARAM', 'max 必须是 1~30 的整数');
   let st;
   try { st = configState(); } catch (e) { throw httpErr(500, 'E_IO', `config.json 读取失败：${e.message}`); }
   const cfg = JSON.parse(st.raw);
-  cfg.emojiGate = { ...(cfg.emojiGate ?? {}), enabled: body.enabled };
+  cfg.emojiGate = { ...(cfg.emojiGate ?? {}), ...(hasEnabled ? { enabled: body.enabled } : {}), ...(hasWindow ? { window: Number(body.window) } : {}), ...(hasMax ? { max: Number(body.max) } : {}) };
   const newRaw = JSON.stringify(cfg, null, 2) + '\n';
   // 备份轮换（与两段式同款，10 份）
   let backupId = null;
@@ -875,7 +880,7 @@ function apiEmojiGate(body) {
   try { JSON.parse(readFileSync(tmp, 'utf8')); } catch (e) { unlinkSync(tmp); throw httpErr(500, 'E_IO', `回读校验失败：${e.message}`); }
   renameSync(tmp, CONFIG_PATH);
   logConsoleOp('emoji_gate', { enabled: body.enabled });
-  return { enabled: body.enabled, backupId, note: '即时生效（适配器现读 config，无需重启）' };
+  return { ...(cfg.emojiGate ?? {}), backupId, note: '即时生效（适配器现读 config，无需重启）' };
 }
 
 // POST /api/emoji {name, dataBase64, desc, overwrite}：六道校验全过才写盘 + 同步补 index.json
@@ -1585,7 +1590,7 @@ const server = createServer((req, res) => {
         if (url === '/api/send/sessions' && req.method === 'GET') return route(() => apiSendSessions());
         if (url === '/api/send/preview' && req.method === 'POST') return route(() => readBody().then((b) => apiSendProxy(b, true)));
         if (url === '/api/send' && req.method === 'POST') return route(() => readBody().then((b) => apiSendProxy(b, false)));
-        if (url === '/api/emoji/gate' && req.method === 'GET') return route(() => ({ emoji: { enabled: (JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).emojiGate ?? {}).enabled !== false } }));
+        if (url === '/api/emoji/gate' && req.method === 'GET') return route(() => { const g = (JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).emojiGate ?? {}); return { emoji: { enabled: g.enabled !== false, window: g.window ?? 5, max: g.max ?? 2 } }; });
         if (url === '/api/emoji/gate' && req.method === 'POST') return route(() => readBody().then(apiEmojiGate));
         if (url === '/api/emoji' && req.method === 'GET') return route(() => apiEmojiList(u.searchParams));
         if (url === '/api/emoji' && req.method === 'POST') return route(() => readBody().then(apiEmojiUpload));
