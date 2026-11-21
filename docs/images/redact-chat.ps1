@@ -1,8 +1,11 @@
 # Redact chat screenshot for public repo: cover owner nickname/avatar areas.
-# ASCII only. Coordinates in SOURCE pixels (1080x2590).
+# ASCII only; coordinates in SOURCE pixels (1080x2590).
+# Usage: edit the two param defaults below to your own paths, then run.
+param(
+  [string]$src = '<your-phone-screenshot.jpg>',
+  [string]$dst = '<output-chat-vision.png>'
+)
 Add-Type -AssemblyName System.Drawing
-$src = 'C:\Users\Administrator\Downloads\Screenshot_2026_1121_103352.jpg'
-$dst = 'C:\Users\Administrator\Downloads\chat-vision.png'
 $img = [System.Drawing.Image]::FromFile($src)
 $bmp = New-Object System.Drawing.Bitmap($img)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
