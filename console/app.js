@@ -174,8 +174,9 @@ function renderOverview() {
         na: notEnabled, degraded,
       }),
       kpiCard({
-        label: '今日 Tokens', value: notEnabled ? '—' : fmtNum(w.tokens.input + w.tokens.output), unit: notEnabled ? '' : '',
-        foot: notEnabled ? '尚未启用' : `缓存命中 ${fmtNum(w.tokens.cacheRead)} · 金额估算待单价配置`,
+        label: '今日 Tokens', value: notEnabled ? '—' : fmtNum(w.tokens.input + w.tokens.output + (w.taskTokens?.input ?? 0) + (w.taskTokens?.output ?? 0)),
+        unit: notEnabled || degraded ? '' : ((w.taskTokens?.runs ?? 0) > 0 ? `含任务${fmtNum((w.taskTokens?.input ?? 0) + (w.taskTokens?.output ?? 0))}` : ''),
+        foot: notEnabled ? '尚未启用' : `唤醒 ${fmtNum(w.tokens.input + w.tokens.output)} · 任务 ${fmtNum((w.taskTokens?.input ?? 0) + (w.taskTokens?.output ?? 0))}（学习${w.taskTokens?.detail?.learn ?? 0}+日记${w.taskTokens?.detail?.diary ?? 0}次）`,
         na: notEnabled, degraded,
       }),
       kpiCard({
@@ -294,7 +295,7 @@ function renderWkStats(sw) {
       <div class="stat"><div class="k">说话率</div><div class="v">${c.speakRate == null ? '—' : c.speakRate}<small>%</small></div></div>
       <div class="stat"><div class="k">平均响应</div><div class="v">${c.avgModelMs == null ? '—' : fmtMs(c.avgModelMs)}<small>· 排除超时</small></div></div>
       <div class="stat"><div class="k">段数均值</div><div class="v">${c.avgLines ?? '—'}<small>· 仅已回</small></div></div>
-      <div class="stat"><div class="k">Tokens</div><div class="v">${fmtNum(t.input + t.output)}<small>缓存 ${fmtNum(t.cacheRead)}</small></div></div>
+      <div class="stat"><div class="k">Tokens</div><div class="v">${fmtNum(t.input + t.output + (sw.taskTokens?.input ?? 0) + (sw.taskTokens?.output ?? 0))}<small>缓存 ${fmtNum(t.cacheRead)}${(sw.taskTokens?.runs ?? 0) > 0 ? ` · 任务 ${fmtNum((sw.taskTokens?.input ?? 0) + (sw.taskTokens?.output ?? 0))}` : ''}</small></div></div>
     </div>
     ${chips ? `<div class="stats-row2">本地拦截 ${c.skipped ?? 0} 次：${chips}</div>` : (c.skipped ? `<div class="stats-row2">本地拦截 ${c.skipped} 次（没花钱）</div>` : '')}`;
 }

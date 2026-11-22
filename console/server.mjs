@@ -195,6 +195,7 @@ async function apiOverview() {
         lines: sent.reduce((a, r) => a + (r.lines ?? 0), 0),
       },
       tokens: tok,
+      taskTokens: taskUsageForDay(localDay(new Date())), // 学习/日记任务今日 token（独立流水，合并展示）
       hourly,
       // 最近流水取全量尾部（不限今日）——冷启动日鱼还没说话时，昨天的记录也是有效信息
       recent: wake.rows.slice(-10).reverse().map((r) => ({
@@ -267,6 +268,23 @@ function apiWakesTrace(q) {
 }
 
 // reason 前缀 → 桶（拦截分桶，契约 §6.2 语义按实际前缀实现）
+// 任务 token 流水聚合（按本地日过滤）：学习/日记每次运行 done 时由 finish() 追加一行到 task-usage.jsonl
+function taskUsageForDay(date) {
+  const agg = { input: 0, output: 0, cacheRead: 0, runs: 0, detail: { learn: 0, diary: 0 } };
+  const r = readJsonlTail(TASK_USAGE, 256 * 1024);
+  if (r.state !== 'ready') return agg;
+  for (const row of r.rows) {
+    if (!row || localDay(row.ts) !== date) continue;
+    const u = row.usage ?? {};
+    agg.input += u.inputTokens ?? 0;
+    agg.output += u.outputTokens ?? 0;
+    agg.cacheRead += u.cacheReadTokens ?? 0;
+    agg.runs++;
+    if (row.kind === 'learn' || row.kind === 'diary') agg.detail[row.kind]++;
+  }
+  return agg;
+}
+
 function reasonBucket(reason) {
   const s = String(reason ?? '');
   if (s === 'silent-hours') return 'silent_hours';
@@ -295,6 +313,7 @@ function apiWakeStats(q) {
     tok.output += u.outputTokens ?? 0;
     tok.cacheRead += u.cacheReadTokens ?? 0;
   }
+  const taskTok = taskUsageForDay(date); // 学习/日记任务的 token（独立流水，合并展示）
   const buckets = {};
   for (const r of skipped) {
     const b = reasonBucket(r.reason);
@@ -316,7 +335,7 @@ function apiWakeStats(q) {
         avgModelMs: measured.length ? Math.round(measured.reduce((a, r) => a + r.modelMs, 0) / measured.length) : null,
         avgLines: sent.length ? Math.round((sent.reduce((a, r) => a + (r.lines ?? 0), 0) / sent.length) * 10) / 10 : null,
       },
-      tokens: tok, buckets, hourly,
+      tokens: tok, taskTokens: taskTok, buckets, hourly,
     },
   };
 }
@@ -1211,6 +1230,7 @@ function apiAutomations() {
 // 学习/日记的 cron 条目移除后由本机制取代（"不按不进行"）；prompt 真源=任务书文件（可随时编辑）。
 const TASKS_MANUAL = join(HERE, 'tasks-manual.json');
 const TASK_DB = join(process.env.USERPROFILE ?? homedir(), '.zcode', 'v2', 'tasks-index.sqlite');
+const TASK_USAGE = join(ADAPTER_DIR, 'state', 'task-usage.jsonl'); // 学习/日记任务 token 流水（每次 done 一行，控制台 token 统计合并用）
 const TASK_PROMPTS = { learn: join(FISHPOND, '.learner-prompt.md'), diary: join(FISHPOND, '.diary-prompt.md') };
 const TASK_MODEL_DEFAULT = {
   learn: { providerId: 'bigmodel-standard-api', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'low' } }, // 库内原任务快照（Flash 而非满推理）
@@ -1362,6 +1382,13 @@ async function runTaskAsync(kind) {
     if (settled) return;
     settled = true;
     taskRuns.set(kind, { status, startedAt: st.startedAt, finishedAt: Date.now(), outTail: outTail.slice(-500), error, ...extra });
+    // 任务 token 流水（只有 done 有 usage——失败/超时无产出不计费）：
+    if (status === 'done' && extra.usage) {
+      try {
+        mkdirSync(dirname(TASK_USAGE), { recursive: true });
+        appendFileSync(TASK_USAGE, JSON.stringify({ ts: new Date().toISOString(), kind, usage: extra.usage }) + '\n', 'utf8');
+      } catch { /* 流水失败不影响任务结果 */ }
+    }
   };
   const timer = setTimeout(() => {
     finish('error', `超过 ${Math.round(TASK_TIMEOUT_MS[kind] / 60000)} 分钟未完成（可能卡住——重试即可）`);
