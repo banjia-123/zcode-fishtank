@@ -95,6 +95,9 @@ function recordSpeak(cfg, chatKey, text, source, emojiPath) {
 // 模型说沉默就沉默——适配器层硬拦，不依赖提示词（提示词说"不想回就输出 [SILENT]"，模型可能忘）
 // 词后必须非字母：防 "password=..."、"passing" 这类正常文本被误判为 pass（冒烟测试实测抓到）
 const SILENT_PREFIX = /^\s*\[?(SILENT|沉默|不说话|pass)\]?(?![a-zA-Z])/i;
+// 行内 SILENT 标记（2026-11-22 模型把 [SILENT] 当段落间沉默符号写在正文中间——字面漏出站）：
+// 只剥方括号标记形态，裸词不动（防误伤"沉默是金"这类正文）；开头的真沉默由 SILENT_PREFIX 整条丢
+const SILENT_INLINE = /\s*\[(?:SILENT|沉默|不说话|pass)\]/gi;
 
 // 出站审计：命中即整条丢弃，不脱敏（脱敏可能漏，漏一次就是不可逆的泄露）
 const BLOCK_RULES = [
@@ -224,7 +227,7 @@ export function createOutbound(cfg, onebot, inboundState) {
           }
           return { text: stripped, emojiPath };
         })();
-    const text = emoji0.text;
+    let text = emoji0.text;
     let emojiPath = emoji0.emojiPath;
     // 新格式 sticker 校验失败的降级日志（字段非法/文件不在库内 → 纯文本发）
     if (isNew && batch.sticker != null && !emojiPath) {
@@ -247,6 +250,8 @@ export function createOutbound(cfg, onebot, inboundState) {
 
     // ② [SILENT] 过滤（对整段——模型可能两种格式都写）
     if (SILENT_PREFIX.test(text)) return drop('silent');
+    // ②.5 行内 [SILENT] 标记剥除：混合输出（说完话补个标记）里标记已是噪音，剥掉照发
+    text = text.replace(SILENT_INLINE, '').trim();
 
     // ③ 禁词（默认空表；config.bannedWords 配置，命中丢弃 + 审计）
     const banned = Array.isArray(cfg.bannedWords) ? cfg.bannedWords : [];

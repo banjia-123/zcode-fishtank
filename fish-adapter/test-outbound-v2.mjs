@@ -196,6 +196,22 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   ok(r.action === 'sent' && !hasImage && hasLiteral, '简写 [不在库内] → 字面保留不发图', JSON.stringify(r));
 }
 
+// 行内 [SILENT] 标记剥除（2026-11-22 模型把标记当段落间沉默符号——字面漏出站）：剥掉照发；裸词不误伤
+{
+  const b = calls.length;
+  const r = await outbound.processMessage({ text: '心里对你无语。[SILENT]\n\n等等，被 @ 了得回——继续说' }, meta('803', 'silent-inline.json'));
+  const s = segs(b);
+  const body = s.map((c) => JSON.stringify(c.p.message)).join('');
+  ok(r.action === 'sent' && !body.includes('[SILENT]') && body.includes('继续说'), '行内 [SILENT] 剥除照发', JSON.stringify(r));
+}
+{
+  const b = calls.length;
+  const r = await outbound.processMessage({ text: "他说'沉默是金'，[沉默]不代表没话说" }, meta('804', 'silent-bare.json'));
+  const s = segs(b);
+  const body = s.map((c) => JSON.stringify(c.p.message)).join('');
+  ok(r.action === 'sent' && !body.includes('[沉默]') && body.includes('沉默是金'), '裸词"沉默"不误伤，标记形态剥除', JSON.stringify(r));
+}
+
 // D4b · 部分成功即成功：第 1 段成功、第 2 段失败 → 已发的不重发、整体算 sent（不进重试）
 {
   const b = calls.length;
