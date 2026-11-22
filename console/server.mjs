@@ -916,6 +916,38 @@ function apiEmojiUpload(body) {
   return { name: base, kind, size: buf.length, desc: descFinal };
 }
 
+// POST /api/emoji/rename {from, to}：文件改名 + index.json 键同步搬移
+// （鱼写 [表情: 文件名] 靠"从索引原样抄"——键与文件必须同改，只改一边她就会对着死键说话）
+function apiEmojiRename(body) {
+  const from = String(body.from ?? '').split(/[\\/]/).pop();
+  const to = String(body.to ?? '').trim().split(/[\\/]/).pop();
+  if (!EMOJI_NAME_RE.test(from)) throw httpErr(400, 'E_BAD_PARAM', '旧文件名非法');
+  if (!EMOJI_NAME_RE.test(to)) throw httpErr(400, 'E_BAD_PARAM', '新文件名非法（1~40 字，中文/字母/数字/横线）');
+  if (from === to) throw httpErr(400, 'E_BAD_PARAM', '新旧名字相同');
+  const extOf = (s) => (s.match(/\.([a-z]+)$/i)?.[1] ?? '').toLowerCase();
+  if (extOf(from) !== extOf(to)) throw httpErr(400, 'E_BAD_PARAM', `扩展名必须保持 .${extOf(from)}——改名只改主名，不动图片类型`);
+  const src = join(EMOJIS_DIR, from);
+  if (!src.startsWith(EMOJIS_DIR)) throw httpErr(400, 'E_BAD_PARAM', '路径非法');
+  if (!existsSync(src)) throw httpErr(404, 'E_NOT_FOUND', '旧文件不存在');
+  const dst = join(EMOJIS_DIR, to);
+  if (!dst.startsWith(EMOJIS_DIR)) throw httpErr(400, 'E_BAD_PARAM', '路径非法');
+  if (existsSync(dst)) throw httpErr(409, 'E_EXISTS', '新名字已被占用');
+  const idx = readEmojiIndex();
+  const desc = idx[from];
+  // 先文件后索引；索引写失败回滚文件名（两边要么同旧要么同新，不留死键）
+  renameSync(src, dst);
+  try {
+    delete idx[from];
+    if (desc !== undefined) idx[to] = desc;
+    writeEmojiIndex(idx);
+  } catch (e) {
+    try { renameSync(dst, src); } catch { /* 回滚也失败：只能留痕让主人手工对齐 */ }
+    throw httpErr(500, 'E_INDEX_FAIL', '索引写入失败，已回滚文件名：' + e.message);
+  }
+  logConsoleOp('emoji_rename', { from, to, hadDesc: desc !== undefined });
+  return { from, to, desc: (typeof desc === 'string' ? desc : desc?.desc) ?? null };
+}
+
 // DELETE /api/emoji/<name>：移入 .trash/<ts>-<name>（不真删），index.json 移除该键
 function apiEmojiDelete(name) {
   const base = String(name ?? '').split(/[\\/]/).pop();
@@ -1598,6 +1630,7 @@ const server = createServer((req, res) => {
         if (url === '/api/emoji/trash' && req.method === 'GET') return route(() => apiEmojiTrash());
         if (url === '/api/emoji/trash/restore' && req.method === 'POST') return route(() => readBody().then(apiEmojiRestore));
         if (url === '/api/emoji-trash-img' && req.method === 'GET') { serveTrashImg(u.searchParams.get('name') ?? '', res); return; }
+        if (url === '/api/emoji/rename' && req.method === 'POST') return route(() => readBody().then(apiEmojiRename));
         const emMatch = url.match(/^\/api\/emoji\/([^/]+)$/);
         if (emMatch && req.method === 'GET') { serveEmojiFile(decodeURIComponent(emMatch[1]), res); return; }
         if (emMatch && req.method === 'DELETE') return route(() => apiEmojiDelete(decodeURIComponent(emMatch[1])));

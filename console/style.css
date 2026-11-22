@@ -320,6 +320,9 @@ select:focus,.date-input:focus{border-color:#3a7f78}
 .emo-del{position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:3px;border:0;background:rgba(10,14,17,.74);color:#9aa9b2;font-size:12px;line-height:1;cursor:pointer;display:none;padding:0;font-family:var(--mono)}
 .emo:hover .emo-del{display:block}
 .emo-del:hover{background:rgba(212,99,92,.88);color:#fff}
+.emo-ren{position:absolute;top:4px;right:28px;width:20px;height:20px;border-radius:3px;border:0;background:rgba(10,14,17,.74);color:#9aa9b2;font-size:12px;line-height:1;cursor:pointer;display:none;padding:0;font-family:var(--mono)}
+.emo:hover .emo-ren{display:block}
+.emo-ren:hover{background:#3a7f78;color:#fff}
 .emoji-foot{margin:14px 0 4px;text-align:center;font-size:11px;color:var(--mute);font-family:var(--mono)}
 .emoji-foot b{color:#8fa2ac;font-weight:500}
 .emo-preview{max-width:100%;max-height:180px;display:block;margin:0 auto;border-radius:4px}

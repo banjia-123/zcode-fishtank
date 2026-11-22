@@ -1035,13 +1035,13 @@ async function loadEmoji() {
   $('#em-strip').innerHTML = `共 <b>${s.total}</b> 张 · 从未使用（自统计起）<b class="${s.neverUsed ? 'warn' : ''}">${s.neverUsed}</b> 张 · 使用数据来源 speak.jsonl（G2 起累积，历史无记录）`;
   $('#emoji-grid').innerHTML = d.items.map((i) => `<div class="emo ${i.desc ? '' : 'no-desc'}">
     <div class="emo-img"><img loading="lazy" src="/api/emoji/${encodeURIComponent(i.name)}" alt="${esc(i.name)}"></div>
-    <button class="emo-del" data-name="${esc(i.name)}" title="删除（进回收站）">×</button>
+    <button class="emo-ren" data-name="${esc(i.name)}" title="改名">✎</button><button class="emo-del" data-name="${esc(i.name)}" title="删除（进回收站）">×</button>
     <div class="emo-info">
       <div class="emo-name" title="${esc(i.name)}">${esc(i.name)}</div>
       <div class="emo-meta"><span class="${i.used ? 'used-mark' : ''}">${i.used} 次</span><span>${i.last ? esc(i.last.slice(0, 10)) : '—'}</span></div>
     </div>
   </div>`).join('') || '<div class="wempty" style="grid-column:1/-1">没有匹配的表情</div>';
-  $('#emoji-foot').innerHTML = `悬停图片右上角 × 删除（进回收站可捞回）· 描述空着的图（半透明）鱼不太知道什么时候用`;
+  $('#emoji-foot').innerHTML = `悬停图片右上角 ✎ 改名 / × 删除（进回收站可捞回）· 描述空着的图（半透明）鱼不太知道什么时候用`;
 }
 
 $('#em-search').addEventListener('input', (e) => { emState.q = e.target.value.trim(); loadEmoji().catch(() => {}); });
@@ -1103,6 +1103,21 @@ async function loadTrash() {
 }
 
 $('#emoji-grid').addEventListener('click', async (e) => {
+  if (e.target.matches('.emo-ren')) {
+    const name = e.target.dataset.name;
+    const stem = name.replace(/\.[a-z]+$/i, '');
+    const ext = name.slice(stem.length);
+    const nn = prompt(`给「${name}」改名——输入新名字（不用带扩展名 ${ext}）：`, stem)?.trim();
+    if (!nn || nn === stem) return;
+    const to = nn + ext;
+    if (!confirm(`「${name}」→「${to}」？\n文件与索引描述同步改名，她的表情索引立即生效。`)) return;
+    try {
+      await api('/api/emoji/rename', { method: 'POST', body: { from: name, to } });
+      toast(`已改名 → ${to}`);
+      loadEmoji().catch(() => {});
+    } catch (err) { toast('改名失败：' + err.message); }
+    return;
+  }
   if (e.target.matches('.emo-del')) {
     const name = e.target.dataset.name;
     if (!confirm(`删除「${name}」？\n移入回收站（.trash），可随时在回收站一键恢复。`)) return;
