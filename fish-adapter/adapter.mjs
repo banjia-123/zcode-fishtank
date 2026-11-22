@@ -4,7 +4,7 @@
 //       ZCode 出站回调 → :3200/zcode → outbound（验签/过滤/审计/限额）→ NapCat HTTP
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, log } from './lib/util.mjs';
 import { OneBotClient } from './lib/onebot.mjs';
@@ -76,10 +76,20 @@ if (PATROL) {
   // FileRead/LS/CompatReadLocalFile 等均为幻觉名，单轮判定把幻觉当漏禁， DENY_ALL 被迫吃进一堆假名）
   // toolsOk 声明在模块级（/stats 端点要把熔断状态暴露给控制台）
   const parseToolList = (content) => String(content ?? '').split(/\r?\n/).map((s) => s.replace(/^[-*\s]+/, '').trim()).filter((s) => /^[A-Za-z][A-Za-z0-9_]*$/.test(s));
+  // 自检 probe 的 token 流水（与控制台 learn/diary 同文件，kind:'selfcheck' 区分——probe 每小时 1~2 次，
+  // usage 此前完全丢弃，token 统计系统性偏低。留痕失败不影响自检）
+  const TASK_USAGE_PATH = join(dirname(fileURLToPath(import.meta.url)), 'state', 'task-usage.jsonl');
+  const logProbeUsage = (usage) => {
+    try {
+      if (!usage) return;
+      appendFileSync(TASK_USAGE_PATH, JSON.stringify({ ts: new Date().toISOString(), kind: 'selfcheck', usage }) + '\n', 'utf8');
+    } catch { /* 留痕失败不阻断自检 */ }
+  };
   async function toolSelfCheck() {
     try {
       const deny = new Set(DENY_ALL);
       const r1 = await wakeClient.wakeOnce(TOOL_AUDIT_PROMPT, { timeoutMs: 30_000 });
+      logProbeUsage(r1.usage);
       const listed1 = parseToolList(r1.content);
       const missing1 = listed1.filter((n) => !deny.has(n));
       if (!missing1.length) {
@@ -89,6 +99,7 @@ if (PATROL) {
       }
       // 名单外出现：可能是幻觉——立即二次确认，两轮都报的才算真工具
       const r2 = await wakeClient.wakeOnce(TOOL_AUDIT_PROMPT, { timeoutMs: 30_000 });
+      logProbeUsage(r2.usage);
       const missing2 = parseToolList(r2.content).filter((n) => !deny.has(n));
       const confirmed = missing1.filter((n) => missing2.includes(n));
       if (confirmed.length) {

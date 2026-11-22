@@ -176,7 +176,7 @@ function renderOverview() {
       kpiCard({
         label: '今日 Tokens', value: notEnabled ? '—' : fmtNum(w.tokens.input + w.tokens.output + (w.taskTokens?.input ?? 0) + (w.taskTokens?.output ?? 0)),
         unit: notEnabled || degraded ? '' : ((w.taskTokens?.runs ?? 0) > 0 ? `含任务${fmtNum((w.taskTokens?.input ?? 0) + (w.taskTokens?.output ?? 0))}` : ''),
-        foot: notEnabled ? '尚未启用' : `唤醒 ${fmtNum(w.tokens.input + w.tokens.output)} · 任务 ${fmtNum((w.taskTokens?.input ?? 0) + (w.taskTokens?.output ?? 0))}（学习${w.taskTokens?.detail?.learn ?? 0}+日记${w.taskTokens?.detail?.diary ?? 0}次）`,
+        foot: notEnabled ? '尚未启用' : `唤醒 ${fmtNum(w.tokens.input + w.tokens.output)} · 任务 ${fmtNum((w.taskTokens?.input ?? 0) + (w.taskTokens?.output ?? 0))}（学习${w.taskTokens?.detail?.learn ?? 0}+日记${w.taskTokens?.detail?.diary ?? 0}+自检${w.taskTokens?.detail?.selfcheck ?? 0}次）`,
         na: notEnabled, degraded,
       }),
       kpiCard({

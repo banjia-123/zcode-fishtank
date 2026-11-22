@@ -270,7 +270,7 @@ function apiWakesTrace(q) {
 // reason 前缀 → 桶（拦截分桶，契约 §6.2 语义按实际前缀实现）
 // 任务 token 流水聚合（按本地日过滤）：学习/日记每次运行 done 时由 finish() 追加一行到 task-usage.jsonl
 function taskUsageForDay(date) {
-  const agg = { input: 0, output: 0, cacheRead: 0, runs: 0, detail: { learn: 0, diary: 0 } };
+  const agg = { input: 0, output: 0, cacheRead: 0, runs: 0, detail: { learn: 0, diary: 0, selfcheck: 0 } };
   const r = readJsonlTail(TASK_USAGE, 256 * 1024);
   if (r.state !== 'ready') return agg;
   for (const row of r.rows) {
@@ -280,7 +280,7 @@ function taskUsageForDay(date) {
     agg.output += u.outputTokens ?? 0;
     agg.cacheRead += u.cacheReadTokens ?? 0;
     agg.runs++;
-    if (row.kind === 'learn' || row.kind === 'diary') agg.detail[row.kind]++;
+    if (row.kind === 'learn' || row.kind === 'diary' || row.kind === 'selfcheck') agg.detail[row.kind]++;
   }
   return agg;
 }
