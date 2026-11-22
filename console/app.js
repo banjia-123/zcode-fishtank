@@ -1419,7 +1419,8 @@ function runStatusText(run, kind) {
 async function triggerTask(kind) {
   const label = kind === 'learn' ? '学习' : '写日记';
   try {
-    await api('/api/tasks/run', { method: 'POST', body: { kind, confirm: 'RUN' } });
+    const j = await api('/api/tasks/run', { method: 'POST', body: { kind, confirm: 'RUN' } });
+    if (j.data?.skipped) { toast(j.data.message); loadAutomations().catch(() => {}); return; }
     toast(label + '任务已启动');
   } catch (e) {
     toast('启动失败：' + e.message);

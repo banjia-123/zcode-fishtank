@@ -1453,6 +1453,20 @@ function apiTaskRun(body) {
   if (body.confirm !== 'RUN') throw httpErr(400, 'E_BAD_PARAM', 'confirm 必须是 RUN（触发真实模型任务，二次确认）');
   const cur = taskRuns.get(kind);
   if (cur?.status === 'running') throw httpErr(409, 'E_RUNNING', `「${kind === 'learn' ? '学习' : '写日记'}」正在运行中（${Math.round((Date.now() - cur.startedAt) / 1000)}s），等它完成`);
+  // 空跑短路（每次启动 ~35K tok 的固定开销，积压 0 时纯浪费）：
+  if (kind === 'learn') {
+    let unlearned = null;
+    try {
+      const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
+      const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
+      unlearned = Math.max(0, chatLines - cursor);
+    } catch { /* 读不到就放行，让任务自己处理 */ }
+    if (unlearned === 0) return { started: false, skipped: 'no-backlog', message: '积压 0 行——没有新消息可学，本次跳过（不调模型）' };
+  }
+  if (kind === 'diary' && existsSync(join(FISHPOND, 'diary', `${localDay(new Date())}.md`))) {
+    // 今日日记已存在 = 任务书"同名跳过"铁律的前置短路，省一次模型调用
+    return { started: false, skipped: 'already-written', message: `今日日记已写过（${localDay(new Date())}.md）——同名跳过，本次不调模型` };
+  }
   taskRuns.set(kind, { status: 'running', startedAt: Date.now() });
   runTaskAsync(kind).catch((e) => taskRuns.set(kind, { status: 'error', startedAt: Date.now(), finishedAt: Date.now(), error: String(e.message ?? e) }));
   return { started: true, kind };
