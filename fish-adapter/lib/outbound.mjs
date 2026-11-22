@@ -16,6 +16,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // v6 起拆成纯校验函数：老格式走 text 里 [表情: 文件名] 标记，新格式走 sticker 字段，共用同一套校验
 const EMOJI_EXTS = /\.(jpe?g|png|gif|webp)$/i;
 const EMOJI_MARK = /\[表情[:：]\s*([^\]]{1,120}?)\s*\]/g;
+// 简写标记 [欸嘿嘿.jpg]（2026-11-22 模型格式漂移实测：教的是 [表情: xxx]，她偷懒省前缀——
+// 字面文本漏出站两次后补的宽容解析）。库里存在才解析，不存在保留字面（不误伤真想发 [xx.jpg] 文字的场景）
+const EMOJI_SHORT = /\[([^\[\]]{1,40}\.(?:jpe?g|png|gif|webp))\]/gi;
 
 // 表情文件名 → 库内绝对路径；不合法/不存在返回 null（降级纯文本）
 function resolveEmojiFile(cfg, name) {
@@ -26,7 +29,9 @@ function resolveEmojiFile(cfg, name) {
   return null;
 }
 
-// 把 text 里的 [表情: xxx] 标记全部剥除（防字面外漏），返回清理后文本
+// 把 text 里的表情标记全部剥除（防字面外漏），返回清理后文本。
+// [表情: xxx] 教过的规范格式：一律剥除（不在库内也剥，只留日志）；
+// [xxx.ext] 简写漂移：库里存在才剥（会作为表情发送），不存在保留字面。
 function stripEmojiMarks(rawText, cfg, chatKey) {
   let text = rawText;
   const marks = [...text.matchAll(EMOJI_MARK)];
@@ -35,6 +40,12 @@ function stripEmojiMarks(rawText, cfg, chatKey) {
       log('outbound', `emoji skipped: "${m[1].trim().slice(0, 60)}"（不在库内或扩展名不符，按纯文本发）`);
     }
     text = text.replace(m[0], '');
+  }
+  for (const m of [...text.matchAll(EMOJI_SHORT)]) {
+    if (resolveEmojiFile(cfg, m[1])) {
+      log('outbound', `emoji shorthand accepted: "${m[1].slice(0, 60)}"（简写漂移，按表情发）`);
+      text = text.replace(m[0], '');
+    }
   }
   return text.trim();
 }
@@ -207,7 +218,7 @@ export function createOutbound(cfg, onebot, inboundState) {
       : (() => {
           const stripped = stripEmojiMarks(joinedRaw, cfg);
           let emojiPath = null;
-          for (const m of [...joinedRaw.matchAll(EMOJI_MARK)]) {
+          for (const m of [...joinedRaw.matchAll(EMOJI_MARK), ...joinedRaw.matchAll(EMOJI_SHORT)]) {
             const p = resolveEmojiFile(cfg, m[1].trim());
             if (p && !emojiPath) emojiPath = p;
           }

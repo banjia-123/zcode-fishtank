@@ -68,7 +68,7 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
 // 用例 3 · 某行含盘符路径 → 整条丢弃 + audit.log 有记录且不含原文（D12）
 {
   const b = calls.length;
-  const r = await outbound.processMessage({ lines: ['看看这个', '就在 C:\\Users\\someone\\secret.txt 里'] }, meta('300', 'c3.json'));
+  const r = await outbound.processMessage({ lines: ['看看这个', '就在 C:\\Users\\Administrator\\secret.txt 里'] }, meta('300', 'c3.json'));
   ok(r.action === 'dropped' && r.reason === 'audit-win-path' && segs(b).length === 0, '3a 盘符路径整条丢弃', JSON.stringify(r));
   const tail = readFileSync(AUDIT_LOG, 'utf8').trim().split('\n').at(-1);
   ok(tail.includes('rule=win-path') && tail.includes('fp='), '3b audit.log 有指纹记录', tail.slice(0, 120));
@@ -176,6 +176,24 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   const s = segs(b);
   const hasImage = s.some((c) => c.p.message.some((x) => x.type === 'image' && String(x.data?.file ?? '').includes('emojis/test.png')));
   ok(r.action === 'sent' && hasImage, 'sticker 有效 → 图文同条', JSON.stringify(r));
+}
+
+// 简写标记 [xxx.png]（2026-11-22 简写漂移修复）：库里存在 → 解析成表情；不在库内 → 字面保留不误伤
+{
+  const b = calls.length;
+  const r = await outbound.processMessage({ text: '散了散了。[test.png]' }, meta('801', 'short.json'));
+  const s = segs(b);
+  const hasImage = s.some((c) => c.p.message.some((x) => x.type === 'image' && String(x.data?.file ?? '').includes('emojis/test.png')));
+  const body = s.map((c) => JSON.stringify(c.p.message)).join('');
+  ok(r.action === 'sent' && hasImage && !body.includes('[test.png]'), '简写 [test.png] 在库内 → 发表情不留字面', JSON.stringify(r));
+}
+{
+  const b = calls.length;
+  const r = await outbound.processMessage({ text: '这是个梗 [不存在的图.png]' }, meta('802', 'short-miss.json'));
+  const s = segs(b);
+  const hasImage = s.some((c) => c.p.message.some((x) => x.type === 'image'));
+  const hasLiteral = s.some((c) => String(c.p.message?.[0]?.data?.text ?? '').includes('[不存在的图.png]'));
+  ok(r.action === 'sent' && !hasImage && hasLiteral, '简写 [不在库内] → 字面保留不发图', JSON.stringify(r));
 }
 
 // D4b · 部分成功即成功：第 1 段成功、第 2 段失败 → 已发的不重发、整体算 sent（不进重试）
