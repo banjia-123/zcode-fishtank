@@ -10,7 +10,7 @@ import { createServer, get as httpGet, request as httpRequest } from 'node:http'
 import { DatabaseSync } from 'node:sqlite';
 import { execFile, spawn as childSpawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFileSync, statSync, openSync, readSync, closeSync, writeFileSync, unlinkSync, renameSync, mkdirSync, readdirSync, appendFileSync, existsSync } from 'node:fs';
+import { readFileSync, statSync, openSync, readSync, closeSync, writeFileSync, unlinkSync, renameSync, mkdirSync, readdirSync, appendFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
@@ -1217,7 +1217,7 @@ function apiAutomations() {
   try {
     const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
     const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
-    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines };
+    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines + 2 };
   } catch { /* 任一文件缺失 → 不显示 */ }
   let vocabMtime = null;
   try { vocabMtime = statSync(join(FISHPOND, 'memory', 'vocab.json')).mtime.toISOString(); } catch { /* 无 */ }
@@ -1463,8 +1463,9 @@ function apiTaskRun(body) {
       const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
       unlearned = Math.max(0, chatLines - cursor);
       // 游标越界（虚推超过实际行数）时积压恒为 0——不能让"积压 0"把学习永久短路，
-      // 提示里点名，让人一眼看到该修游标而不是以为没新消息
-      if (cursor > chatLines) return { started: false, skipped: 'cursor-overflow', message: `游标越界（已学到 ${cursor} 行 > 日志现有 ${chatLines} 行）——游标虚高，学习被拦下；请回拨 .learner-cursor 后重试` };
+      // 提示里点名，让人一眼看到该修游标而不是以为没新消息。
+      // +2 容忍带：AI 数行有 off-by-one 固有误差（11-22 实测重学 42 行写 2199，实际 2198），1~2 行无害自愈
+      if (cursor > chatLines + 2) return { started: false, skipped: 'cursor-overflow', message: `游标越界（已学到 ${cursor} 行 > 日志现有 ${chatLines} 行）——游标虚高，学习被拦下；请回拨 .learner-cursor 后重试` };
     } catch { /* 读不到就放行，让任务自己处理 */ }
     if (unlearned === 0) return { started: false, skipped: 'no-backlog', message: '积压 0 行——没有新消息可学，本次跳过（不调模型）' };
   }
@@ -1473,6 +1474,11 @@ function apiTaskRun(body) {
     return { started: false, skipped: 'already-written', message: `今日日记已写过（${localDay(new Date())}.md）——同名跳过，本次不调模型` };
   }
   taskRuns.set(kind, { status: 'running', startedAt: Date.now() });
+  // 学习任务前快照 candidates.md（2026-11-22 三连实测：learner 重写候选文件时不带旧内容，
+  // "Edit 追加"软引导两连败——任务前留 .prev 快照，AI 糟蹋了也能一键回滚）
+  if (kind === 'learn') {
+    try { copyFileSync(join(FISHPOND, 'memory', 'candidates.md'), join(FISHPOND, 'memory', 'candidates.md.prev')); } catch { /* 无旧文件则跳过 */ }
+  }
   runTaskAsync(kind).catch((e) => taskRuns.set(kind, { status: 'error', startedAt: Date.now(), finishedAt: Date.now(), error: String(e.message ?? e) }));
   return { started: true, kind };
 }
@@ -1488,7 +1494,7 @@ function apiTaskStatus() {
   try {
     const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
     const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
-    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines };
+    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines + 2 };
   } catch { /* 缺文件不显示 */ }
   let vocabMtime = null;
   try { vocabMtime = statSync(join(FISHPOND, 'memory', 'vocab.json')).mtime.toISOString(); } catch { /* 无 */ }
