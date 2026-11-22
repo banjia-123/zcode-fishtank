@@ -157,6 +157,7 @@ export function createAppServerClient(cfg) {
   // attachments（2026-11-21）：{type:'image', path:'绝对路径'} 数组——协议原生附件（宿主自己读文件），
   // 群图随行让她真能"看到"图（此前 [图片: xxx] 对她只是字面文本，零工具形态又读不了盘）
   // inFlight 包装层：活跃唤醒计数（见 return 处 inFlight 暴露说明）
+  let unknownKindLogged = false; // 帧形状探测去重（进程级一次即可）
   async function wakeOnce(prompt, opts = {}) {
     inFlight++;
     try {
@@ -177,6 +178,7 @@ export function createAppServerClient(cfg) {
       await request('session/subscribe', { sessionId, deliveryKind: 'desktop-continuous' });
       return await new Promise((resolve, reject) => {
         let text = '';
+        let thinking = ''; // 思考过程采集（wake trace 用，2026-11-22）；协议若无思考帧则保持空串，trace 降级为 prompt+reply
         const onEvent = (frame) => {
           if (frame.method !== 'session/event') return;
           // 并发串线隔离（2026-11-22 09:38 实测事故）：宿主事件流是广播型——每小时自检 probe 与
@@ -187,12 +189,20 @@ export function createAppServerClient(cfg) {
           if (evSid && evSid !== sessionId) return;
           const p = frame.params?.payload ?? {};
           if (p.kind === 'text_delta' && typeof p.delta === 'string') text += p.delta;
+          // 思考 delta：**实测协议命名 reasoning_delta**（2026-11-22 02:03 探测日志抓到）；thinking_delta 为常见约定别名，一并兼容
+          else if ((p.kind === 'reasoning_delta' || p.kind === 'thinking_delta') && typeof p.delta === 'string') thinking += p.delta;
+          else if (p.kind === 'thinking' && typeof (p.delta ?? p.content ?? p.text) === 'string') thinking += (p.delta ?? p.content ?? p.text);
+          else if (p.kind !== 'text_delta' && typeof p.delta === 'string' && !unknownKindLogged) {
+            // 帧形状探测（进程级一次）：上线后瞄一眼 adapter.log 就知道协议还有哪些 delta 形态
+            unknownKindLogged = true;
+            log('wake', `unknown event kind=${JSON.stringify(String(p.kind ?? '?')).slice(0, 40)}（带 string delta，未采集——若这是思考/工具帧请补分支）`);
+          }
           if (p.error) {
             cleanup();
             reject(new Error(`turn-failed: ${String(p.error.message ?? p.error.type ?? '').slice(0, 140)}`));
           } else if (p.content != null && p.stopReason != null) {
             cleanup();
-            resolve({ content: String(p.content ?? text), stopReason: p.stopReason, usage: p.usage ?? null });
+            resolve({ content: String(p.content ?? text), thinking: thinking || null, stopReason: p.stopReason, usage: p.usage ?? null });
           }
         };
         const timer = setTimeout(() => { cleanup(); reject(new Error('wake-timeout')); }, timeoutMs);

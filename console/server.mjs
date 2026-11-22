@@ -20,6 +20,7 @@ const PKG_ROOT = dirname(HERE);
 const PORT = 3201;
 const ADAPTER_BASE = 'http://127.0.0.1:3200';
 const WAKE_LOG = join(PKG_ROOT, 'fish-adapter', 'logs', 'wake.jsonl');
+const WAKE_TRACE = join(PKG_ROOT, 'fish-adapter', 'logs', 'wake-trace.jsonl'); // 思维链 trace（wake/safe.mjs 落盘）
 const ADAPTER_CFG = join(PKG_ROOT, 'fish-adapter', 'config.json');
 const ADAPTER_DIR = join(PKG_ROOT, 'fish-adapter');
 const FISHPOND = join(PKG_ROOT, 'fishpond');
@@ -215,8 +216,8 @@ async function apiOverview() {
 }
 
 // ── GET /api/wakes?date=&chat=&result=：工作日志列表（G4）──
-// 触发消息原文不落盘（审计红线），行内字段即全部数据——展开不需要二次请求（与接口契约 §7.2 的差异：
-// 契约预期 :batchId 详情端点，实现为列表自带全字段，省一次往返）
+// wake.jsonl 只落元数据（审计红线本体不动）；prompt/thinking/reply 落在独立旁路文件 wake-trace.jsonl
+// （2026-11-22 施法事故后加，见 /api/wakes/trace）——展开区按需二次请求该文件，列表本身仍零内容字段
 function normDate(s) {
   const m = String(s ?? '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (!m) return localDay(new Date());
@@ -250,6 +251,19 @@ function apiWakes(q) {
       rows: rows.map(maskWakeRow),
     },
   };
+}
+
+// ── GET /api/wakes/trace?batchId=：单次唤醒思维链（G-wk，2026-11-22 施法事故后加）──
+// wake-trace.jsonl 由适配器 wake/safe.mjs 落盘：{ts, batchId, chatKey, result, prompt, thinking, reply, usage, ...}
+// 按需尾读按 batchId 匹配取最后一条（重试场景同名多行）；审计红线本体不变（wake.jsonl/audit.log 仍不落原文）
+function apiWakesTrace(q) {
+  const batchId = String(q.get('batchId') ?? '').trim();
+  if (!batchId) throw httpErr(400, 'E_BAD_PARAM', 'batchId 必填');
+  const r = readJsonlTail(WAKE_TRACE, 2 * 1024 * 1024);
+  if (r.state !== 'ready') return { state: r.state, trace: null };
+  const hit = r.rows.filter((x) => x && x.batchId === batchId).pop();
+  if (!hit) return { state: 'not_found', trace: null };
+  return { state: 'ready', trace: hit };
 }
 
 // reason 前缀 → 桶（拦截分桶，契约 §6.2 语义按实际前缀实现）
@@ -1605,6 +1619,7 @@ const server = createServer((req, res) => {
         if (url === '/api/overview' && req.method === 'GET') return route(() => apiOverview());
         if (url === '/api/wakes' && req.method === 'GET') return route(() => apiWakes(u.searchParams));
         if (url === '/api/wakes/stats' && req.method === 'GET') return route(() => apiWakeStats(u.searchParams));
+        if (url === '/api/wakes/trace' && req.method === 'GET') return route(() => apiWakesTrace(u.searchParams));
         if (url === '/api/review/memory' && req.method === 'GET') return route(() => apiReviewList('memory'));
         if (url === '/api/review/vocab' && req.method === 'GET') return route(() => apiReviewList('vocab'));
         if (url === '/api/review/token' && req.method === 'GET') return route(() => apiReviewToken(u.searchParams));

@@ -309,7 +309,7 @@ function renderWkList(w) {
     el.innerHTML = `<div class="wempty">这一天没有唤醒记录${w.partial ? '（或超出可回溯范围）' : ''}</div>`;
     return;
   }
-  $('#wk-hint').textContent = `${w.total} 条${w.partial ? ' · 尾读截断：早期记录可能不全' : ''} · 触发消息原文不落盘（审计红线）`;
+  $('#wk-hint').textContent = `${w.total} 条${w.partial ? ' · 尾读截断：早期记录可能不全' : ''} · wake.jsonl 只落元数据（审计红线本体）· 思维链点开行加载（wake-trace.jsonl）`;
   el.innerHTML = w.rows.map((r, i) => {
     const open = wkState.open.has(r.batchId ?? String(i));
     const pct = r.modelMs != null ? Math.min(100, (r.modelMs / 90000) * 100) : 0;
@@ -340,10 +340,11 @@ function renderWkList(w) {
       </div>
       <div class="wdetail"><div class="wdetail-inner">
         <div>
-          <div class="detail-note">触发消息原文不落盘（审计红线）——本批 ${r.msgs} 条消息的内容可在对话便签（state/peers）近似回放。${r.dropped ? ' · 本批已丢弃不重放' : ''}</div>
+          <div class="detail-note">wake.jsonl 只落元数据（审计红线本体）；本批 ${r.msgs} 条消息的完整报文/思考/回复在 trace 旁路文件，展开即加载。${r.dropped ? ' · 本批已丢弃不重放' : ''}</div>
           ${dl || '<div class="detail-note">（无附加字段）</div>'}
         </div>
         <div class="gate"><div class="gline"><span class="k">usage</span><b>${r.usage ? '' : '（无）'}</b></div>${r.usage ? gate : ''}</div>
+        <div class="wk-trace" data-batch="${esc(r.batchId ?? '')}"><div class="detail-note">思维链：尚未加载</div></div>
       </div></div>
     </div>`;
   }).join('');
@@ -385,7 +386,36 @@ $('#wk-list').addEventListener('click', (e) => {
   const k = r?.batchId ?? head.dataset.i;
   if (wkState.open.has(k)) wkState.open.delete(k); else wkState.open.add(k);
   row.classList.toggle('open');
+  // 展开时按需加载思维链（一次缓存，收起再开不重复请求）
+  if (row.classList.contains('open') && r?.batchId) loadWkTrace(row.querySelector('.wk-trace'), r.batchId);
 });
+
+// ── 思维链 trace（2026-11-22 施法事故后加）：▶ 展开时按需拉取，不进轮询 ──
+function renderTrace(t) {
+  if (!t || (!t.prompt && !t.reply && !t.thinking)) {
+    return '<div class="detail-note">无 trace 内容——此记录早于 trace 功能（2026-11-22 上线）。</div>';
+  }
+  const att = Array.isArray(t.attachments) && t.attachments.length ? `<div class="detail-note">附件：${esc(t.attachments.join('、'))}</div>` : '';
+  return `
+    ${t.thinking ? `<details class="wk-tr-sec"><summary>🧠 思考过程</summary><pre>${esc(t.thinking)}</pre></details>` : '<div class="detail-note">🧠 思考过程：无（该批未吐思考帧）</div>'}
+    ${t.reply ? `<div class="wk-tr-sec"><b>💬 回复</b><pre>${esc(t.reply)}</pre></div>` : ''}
+    ${t.prompt ? `<details class="wk-tr-sec"><summary>📥 收到报文</summary>${att}<pre>${esc(t.prompt)}</pre></details>` : ''}`;
+}
+
+async function loadWkTrace(el, batchId) {
+  if (!el || el.dataset.loaded === '1' || !batchId) return;
+  el.dataset.loaded = '1';
+  try {
+    const j = await api('/api/wakes/trace?batchId=' + encodeURIComponent(batchId));
+    const d = j.data ?? {};
+    el.innerHTML = d.state === 'ready'
+      ? renderTrace(d.trace)
+      : `<div class="detail-note">trace ${d.state === 'not_enabled' ? '文件尚未生成（功能上线后第一条唤醒起才有）' : d.state === 'not_found' ? '未找到该批次（早于功能上线或超出尾读范围）' : '读取失败：' + esc(d.error ?? d.state)}</div>`;
+  } catch (err) {
+    el.dataset.loaded = ''; // 失败允许重试
+    el.innerHTML = `<div class="detail-note">trace 加载失败：${esc(err.message)}</div>`;
+  }
+}
 $('#wk-date').addEventListener('change', (e) => { wkState.date = e.target.value || todayStr(); wkState.open.clear(); startWakesPolling(); renderWakes(); });
 $('#wk-chat').addEventListener('change', (e) => { wkState.chat = e.target.value; wkState.open.clear(); renderWakes(); });
 $('#wk-result').addEventListener('change', (e) => { wkState.result = e.target.value; wkState.open.clear(); renderWakes(); });

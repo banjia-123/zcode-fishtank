@@ -44,6 +44,21 @@ function logWake(obj) {
   } catch { /* 留痕失败不阻断 */ }
 }
 
+// 唤醒思维链 trace（2026-11-22 施法事故后加）：prompt/thinking/reply 全量落独立文件，控制台工作日志 ▶ 展开
+// 即看完整闭环。与 wake.jsonl 分文件的原因：审计红线本体不动（wake.jsonl 仍不落原文），trace 是新约定的
+// 排查旁路——prompt 含入站原文，但 chat.jsonl（学习数据源）本就全量落原文，不新增敏感信息。
+// 轮转上限 8MB 见 lib/rotate.mjs（比其他日志宽：单条 5~10KB，8MB ≈ 一周热闹量）。
+const WAKE_TRACE = join(ROOT_DIR, 'logs', 'wake-trace.jsonl');
+
+function logTrace(obj) {
+  try {
+    mkdirSync(join(ROOT_DIR, 'logs'), { recursive: true });
+    appendFileSync(WAKE_TRACE, JSON.stringify({ ts: new Date().toISOString(), ...obj }) + '\n', 'utf8');
+  } catch { /* 留痕失败不阻断 */ }
+}
+
+const attPaths = (a) => Array.isArray(a) ? a.map((x) => x?.path ?? x?.localPath ?? '').filter(Boolean) : [];
+
 // 静默时段（本地判断；跨午夜区间如 01:00→07:00 正确处理）
 export function inSilentHours(silentHours, now = new Date()) {
   const { start, end } = silentHours ?? {};
@@ -113,6 +128,7 @@ export function createWakeSafe(cfg, client) {
     if (blocked) {
       // 本地拦截不是唤醒：wake 计数不动，只留一行便于排障（S2.16「空转 = 0」核对的是真唤醒）
       logWake({ batchId: meta.batchId, chatKey, msgs: meta.msgs ?? 0, result: 'skipped', reason: blocked });
+      logTrace({ batchId: meta.batchId, chatKey, msgs: meta.msgs ?? 0, result: 'skipped', reason: blocked, prompt, attachments: attPaths(meta.attachments) });
       job.resolve({ skipped: true, reason: blocked });
       return;
     }
@@ -129,9 +145,11 @@ export function createWakeSafe(cfg, client) {
       if (SILENT_RE.test(content)) {
         out = { silent: true, modelMs, usage: r.usage };
         logWake({ batchId: meta.batchId, chatKey, msgs: meta.msgs ?? 0, waitMs: job.enqueuedAt ? Date.now() - job.enqueuedAt : 0, modelMs, result: 'silent', usage: r.usage });
+        logTrace({ batchId: meta.batchId, chatKey, waitMs: job.enqueuedAt ? Date.now() - job.enqueuedAt : 0, modelMs, result: 'silent', prompt, thinking: r.thinking ?? null, reply: content, usage: r.usage, attachments: attPaths(meta.attachments) });
       } else {
         out = { content, modelMs, usage: r.usage };
         logWake({ batchId: meta.batchId, chatKey, msgs: meta.msgs ?? 0, waitMs: job.enqueuedAt ? Date.now() - job.enqueuedAt : 0, modelMs, result: 'sent', lines: content.split(/\r?\n/).filter(Boolean).length, usage: r.usage });
+        logTrace({ batchId: meta.batchId, chatKey, waitMs: job.enqueuedAt ? Date.now() - job.enqueuedAt : 0, modelMs, result: 'sent', prompt, thinking: r.thinking ?? null, reply: content, usage: r.usage, attachments: attPaths(meta.attachments) });
       }
       // 成功清零失败计数（无论 silent 还是 sent，协议层跑通了就是成功）
       failStreak.set(chatKey, 0);
@@ -148,6 +166,7 @@ export function createWakeSafe(cfg, client) {
         log('wake', `WARN 群 ${chatKey} 连续失败 ${streak} 次，熔断 10 分钟（最后一次: ${e.message}）`);
       }
       logWake({ batchId: meta.batchId, chatKey, msgs: meta.msgs ?? 0, modelMs, result: isTimeout ? 'timeout' : 'error', error: String(e.message ?? e).slice(0, 160), dropped: true });
+      logTrace({ batchId: meta.batchId, chatKey, modelMs, result: isTimeout ? 'timeout' : 'error', prompt, error: String(e.message ?? e).slice(0, 160), dropped: true, attachments: attPaths(meta.attachments) });
       out = { error: e.message, modelMs };
     }
     job.resolve(out);

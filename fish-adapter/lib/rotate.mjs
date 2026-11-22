@@ -9,21 +9,23 @@ import { bridgeDirs } from './bridge.mjs';
 
 const ROTATE_BYTES = 2 * 1024 * 1024; // 单文件 2MB 触发
 
-// [文件名, 目录]——适配器日志都在 ROOT_DIR/logs；speak.jsonl 在鱼缸领地 fishpond/logs
+// [文件名, 目录, 可选自定义上限字节]——适配器日志都在 ROOT_DIR/logs；speak.jsonl 在鱼缸领地 fishpond/logs
+// wake-trace.jsonl 单条 5~10KB（prompt 全量），默认 2MB 只够半天的量——单列 8MB ≈ 一周热闹量
 const LOG_FILES = [
   ['adapter.log', join(ROOT_DIR, 'logs')],
   ['wake.jsonl', join(ROOT_DIR, 'logs')],
   ['audit.log', join(ROOT_DIR, 'logs')],
   ['speak.jsonl', null], // 运行时用 bridgeDirs(cfg).base 解析（鱼缸目录可配置）
+  ['wake-trace.jsonl', join(ROOT_DIR, 'logs'), 8 * 1024 * 1024],
 ];
 
 export function rotateOversizedLogs(cfg) {
   const pondLogs = join(bridgeDirs(cfg).base, 'logs');
   const touched = [];
-  for (const [f, dir] of LOG_FILES) {
+  for (const [f, dir, cap] of LOG_FILES) {
     const full = join(dir ?? pondLogs, f);
     try {
-      if (!existsSync(full) || statSync(full).size <= ROTATE_BYTES) continue;
+      if (!existsSync(full) || statSync(full).size <= (cap ?? ROTATE_BYTES)) continue;
       const old = full + '.1';
       if (existsSync(old)) { try { renameSync(old, full + '.2'); } catch { /* .2 被占则放弃本轮 */ } }
       const kb = Math.round(statSync(full).size / 1024);
