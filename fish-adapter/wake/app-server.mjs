@@ -156,7 +156,17 @@ export function createAppServerClient(cfg) {
   // 返回 { content, stopReason, usage }；[SILENT] 判定归上层 safe（wake 只管协议）
   // attachments（2026-11-21）：{type:'image', path:'绝对路径'} 数组——协议原生附件（宿主自己读文件），
   // 群图随行让她真能"看到"图（此前 [图片: xxx] 对她只是字面文本，零工具形态又读不了盘）
-  async function wakeOnce(prompt, { timeoutMs = 90_000, attachments } = {}) {
+  // inFlight 包装层：活跃唤醒计数（见 return 处 inFlight 暴露说明）
+  async function wakeOnce(prompt, opts = {}) {
+    inFlight++;
+    try {
+      return await wakeOnceRaw(prompt, opts);
+    } finally {
+      inFlight--;
+    }
+  }
+
+  async function wakeOnceRaw(prompt, { timeoutMs = 90_000, attachments } = {}) {
     await ensure();
     const created = await request('session/create', {
       workspace: { workspacePath: WORKSPACE, workspaceKey: WORKSPACE },
@@ -169,6 +179,12 @@ export function createAppServerClient(cfg) {
         let text = '';
         const onEvent = (frame) => {
           if (frame.method !== 'session/event') return;
+          // 并发串线隔离（2026-11-22 09:38 实测事故）：宿主事件流是广播型——每小时自检 probe 与
+          // 业务唤醒并发时，probe 的终态帧被业务处理器 resolve，7 行工具名被当鱼嘴发言出了站，
+          // 业务真正的回复被 probe 处理器吃掉。宿主多会话并存，帧带会话标识，按它严格过滤；
+          // 帧缺标识（协议漂移兜底）不过滤，靠自检错峰双保险。
+          const evSid = frame.params?.sessionId ?? frame.params?.payload?.sessionId;
+          if (evSid && evSid !== sessionId) return;
           const p = frame.params?.payload ?? {};
           if (p.kind === 'text_delta' && typeof p.delta === 'string') text += p.delta;
           if (p.error) {
@@ -207,7 +223,8 @@ export function createAppServerClient(cfg) {
     try { child?.kill(); } catch { /* 已退 */ }
   }
 
-  return { wakeOnce, ensure, stop, isAlive: () => Boolean(child) };
+  let inFlight = 0; // 活跃 wakeOnce 数（自检错峰用：串线已按 sessionId 过滤，此为帧缺标识时的兜底）
+  return { wakeOnce, ensure, stop, isAlive: () => Boolean(child), inFlight: () => inFlight };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

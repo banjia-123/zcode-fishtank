@@ -103,8 +103,14 @@ if (PATROL) {
     }
   }
   // 自检节奏：每小时一次。两轮确认下真漏禁最多存活 1 小时；幻觉噪声不再哑火
-  setTimeout(toolSelfCheck, 3_000).unref?.();
-  setInterval(toolSelfCheck, 60 * 60 * 1000).unref?.();
+  // 自检错峰（2026-11-22 事故双保险）：probe 与业务唤醒并发曾串线（app-server 已按 sessionId
+  // 过滤根治，此为帧缺标识时的兜底）——有活跃唤醒时推迟 60s，宁可自检晚点也不并发
+  async function toolSelfCheckGuarded() {
+    if (wakeClient.inFlight() > 0) { setTimeout(toolSelfCheckGuarded, 60_000).unref?.(); return; }
+    return toolSelfCheck();
+  }
+  setTimeout(toolSelfCheckGuarded, 3_000).unref?.();
+  setInterval(toolSelfCheckGuarded, 60 * 60 * 1000).unref?.();
 
   // —— flush 正式出口：合成报文 → wakeSafe → 原出站链路（S2-E 接线）——
   patrolPeers = createPeers(cfg, async (chatKey, batch, info) => {
