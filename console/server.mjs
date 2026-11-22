@@ -1211,11 +1211,13 @@ function apiAutomations() {
   }
 
   // 学习积压：.learner-cursor（已学到行）vs logs/chat.jsonl 总行数
+  // cursorOverflow（2026-11-22 实测）：learner 会话自己 Edit 游标无钳制，一次虚推到 2556（实际仅 2198 行）
+  // → 积压永远算 0、空跑短路永远触发、学习链路静默断裂。这里标出越界，卡片显红，修游标前一眼可见。
   let backlog = null;
   try {
     const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
     const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
-    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor) };
+    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines };
   } catch { /* 任一文件缺失 → 不显示 */ }
   let vocabMtime = null;
   try { vocabMtime = statSync(join(FISHPOND, 'memory', 'vocab.json')).mtime.toISOString(); } catch { /* 无 */ }
@@ -1460,6 +1462,9 @@ function apiTaskRun(body) {
       const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
       const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
       unlearned = Math.max(0, chatLines - cursor);
+      // 游标越界（虚推超过实际行数）时积压恒为 0——不能让"积压 0"把学习永久短路，
+      // 提示里点名，让人一眼看到该修游标而不是以为没新消息
+      if (cursor > chatLines) return { started: false, skipped: 'cursor-overflow', message: `游标越界（已学到 ${cursor} 行 > 日志现有 ${chatLines} 行）——游标虚高，学习被拦下；请回拨 .learner-cursor 后重试` };
     } catch { /* 读不到就放行，让任务自己处理 */ }
     if (unlearned === 0) return { started: false, skipped: 'no-backlog', message: '积压 0 行——没有新消息可学，本次跳过（不调模型）' };
   }
@@ -1478,12 +1483,12 @@ function apiTaskStatus() {
   for (const [k, v] of taskRuns) runs[k] = { ...v, elapsedMs: v.status === 'running' ? Date.now() - v.startedAt : (v.finishedAt ?? 0) - (v.startedAt ?? 0) };
   const withDiag = { ...runs };
   if (taskEventLog.length) withDiag.__events = taskEventLog.slice(0, 10);
-  // 学习积压
+  // 学习积压（cursorOverflow 同 apiAutomations：虚推越界要显红，学习链路静默断裂不能无感知）
   let backlog = null;
   try {
     const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
     const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
-    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor) };
+    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines };
   } catch { /* 缺文件不显示 */ }
   let vocabMtime = null;
   try { vocabMtime = statSync(join(FISHPOND, 'memory', 'vocab.json')).mtime.toISOString(); } catch { /* 无 */ }

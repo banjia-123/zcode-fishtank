@@ -1368,13 +1368,13 @@ async function loadAutomations() {
   // 学习积压卡
   const b = d.backlog;
   $('#am-backlog').innerHTML = b
-    ? `<div class="card-head"><h2>学习任务积压</h2><span class="hint">游标 vs 消息日志行数（纯文件读，零成本）</span></div>
+    ? `<div class="card-head"><h2>学习任务积压${b.cursorOverflow ? ' <span style="color:#e07b7b">⚠ 游标越界</span>' : ''}</h2><span class="hint">游标 vs 消息日志行数（纯文件读，零成本）</span></div>
        <div class="card-body"><div class="stats-row">
-         <div class="stat"><div class="k">已学到</div><div class="v">${b.cursor}<small>行</small></div></div>
+         <div class="stat"><div class="k">已学到</div><div class="v" style="color:${b.cursorOverflow ? '#e07b7b' : ''}">${b.cursor}<small>行</small></div></div>
          <div class="stat"><div class="k">日志现有</div><div class="v">${b.chatLines}<small>行</small></div></div>
-         <div class="stat"><div class="k">积压未学</div><div class="v" style="color:${b.unlearned > 100 ? '#d7ac5c' : '#6cc494'}">${b.unlearned}<small>行</small></div></div>
+         <div class="stat"><div class="k">积压未学</div><div class="v" style="color:${b.cursorOverflow ? '#e07b7b' : b.unlearned > 100 ? '#d7ac5c' : '#6cc494'}">${b.unlearned}<small>行</small></div></div>
          <div class="stat"><div class="k">行话库最后产出</div><div class="v" style="font-size:13px">${d.vocabMtime ? esc(d.vocabMtime.replace('T', ' ').slice(0, 16)) : '—'}</div></div>
-       </div></div>`
+       </div>${b.cursorOverflow ? '<div style="color:#e07b7b;font-size:12px;padding:6px 14px 12px">游标超过日志实际行数（虚推）——学习被短路拦下，需手动回拨 .learner-cursor</div>' : ''}</div>`
     : '';
 
   // 日记积压卡（G9 加菜：今日是否已写 / 今日素材 / 连续记录 / 最近 7 天缺口）
