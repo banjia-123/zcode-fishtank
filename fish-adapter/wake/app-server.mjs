@@ -30,6 +30,8 @@ export const DENY_ALL = [
   // 定时/闲时任务族（S2-A 实测 deny 后仍剩 Cron，必须点名）
   'CronCreate', 'CronDelete', 'CronList', 'CronUpdate', 'CronRead',
   'OffPeakCreate', 'OffPeakList', 'OffPeakUpdate', 'OffPeakResume',
+  // Notebook 系：2026-11-22 04:52 自检双跑均报 NotebookEdit（本体一直漏列），00:38 幻觉轮报过 ReadCell/EditCell——一并点名
+  'NotebookEdit', 'NotebookReadCell', 'NotebookEditCell',
   // MCP：鲸鱼挂件 / PRTS 启动动画 / node_repl（浏览器与计算机控制）/ 宿主 tools 上报
   'mcp__plugin_zcode-fox-widget_whale__whale_balance',
   'mcp__plugin_zcode-fox-widget_whale__whale_config',
