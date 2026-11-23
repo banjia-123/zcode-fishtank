@@ -958,8 +958,14 @@ async function execMode() {
     }
     renderHealth();
   } catch (e) {
-    out.textContent += '\n[失败] ' + e.message;
-    toast('执行失败：' + e.message);
+    if (target === 'offline') {
+      // 下线后控制台随之停止：此后任何请求失败都不是新故障——失联本就是下线的一部分
+      out.textContent += '\n✓ 控制台已停止（页面失联属下线的预期一环）——成败以操作流水里的 offline 记录为准。';
+      toast('下线中/已下线：控制台停止属预期');
+    } else {
+      out.textContent += '\n[失败] ' + e.message;
+      toast('执行失败：' + e.message);
+    }
   } finally {
     modeBusy = false;
     renderModeSwitch(Boolean($('#modeSwitch').dataset.online));
