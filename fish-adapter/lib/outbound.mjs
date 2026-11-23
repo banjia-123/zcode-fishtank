@@ -6,8 +6,7 @@
 import { auditAlert, log, ROOT_DIR } from './util.mjs';
 import { isBusy } from './inbound.mjs';
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, dirname as pathDirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, join } from 'node:path';
 import { bridgeDirs } from './bridge.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -54,7 +53,10 @@ function stripEmojiMarks(rawText, cfg, chatKey) {
 // 带表情 → 本次表情降级纯文本。prompt 软引导（踩坑 31 / 措辞 v1-v3）对 Flash/low 档无效的工程兜底。
 // 开关/阈值现读 config（mtime 缓存）——控制台切开关即时生效，无需重启适配器。
 const EMOJI_GATE_DEFAULT = { enabled: true, window: 5, max: 2 };
-const EMOJI_GATE_FILE = join(pathDirname(fileURLToPath(import.meta.url)), 'config.json');
+// EMOJI_GATE_FILE（2026-11-23 修复）：此前按 import.meta.url 推导，指向不存在的 lib/config.json，
+// 硬闸永远走默认值——控制台开关从未生效过。配置在包根 config.json（= ROOT_DIR）；测试隔离下 ROOT_DIR
+// 指向临时目录、读不到即走默认，行为不变。
+const EMOJI_GATE_FILE = join(ROOT_DIR, 'config.json');
 let gateCache = { mtime: 0, state: { ...EMOJI_GATE_DEFAULT } };
 function emojiGateState() {
   try {
