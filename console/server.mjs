@@ -619,11 +619,25 @@ function apiModeAction(body) {
   if (body.confirm !== target.toUpperCase()) throw httpErr(400, 'E_BAD_PARAM', `confirm 必须是 ${target.toUpperCase()}（二次确认防手滑）`);
   const ps1 = target === 'online' ? PS_ONLINE : PS_OFFLINE;
   try { statSync(ps1); } catch { throw httpErr(500, 'E_IO', `找不到脚本：${ps1}`); }
+  // 下线脚本最后一步会杀掉本控制台（弑父）：execFile 干等它的回调永远等不到，浏览器侧
+  // fetch 也随连接断开报错（2026-11-23 20:37 事故：页面报"下线失败"，实际下了一大半、流水没写）。
+  // 改为 detach 发起即返回；脚本侧已把流水落盘挪到关控制台之前，结果以 ops 流水为准。
+  if (target === 'offline') {
+    // Windows/PowerShell 5.1 实测三坑（2026-11-23 演练逐个排除）：detached:true（DETACHED_PROCESS
+    // 无控制台）秒退；stdio:'ignore'（stdin=NUL）秒退；父进程 spawn 后立即退出子也活不成。
+    // 本场景父（控制台）会活到脚本最后一步才被杀，天然满足存活条件——输出落文件留排障日志。
+    const logFd = openSync(join(PKG_ROOT, 'console', 'offline-spawn.log'), 'a');
+    const p = childSpawn('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1, '-NoPause', '-Actor', 'console'],
+      { stdio: ['pipe', logFd, logFd], windowsHide: true });
+    p.unref();
+    return Promise.resolve({ target, ok: true, stage: 'dispatched', exitCode: null,
+      output: ['下线流程已发起（约 5~10 秒完成）。', '控制台自身最后停止——本页面稍后会失联，属预期；鱼重新上线时控制台会随之拉起。'] });
+  }
   return new Promise((resolve) => {
     // [Console]::OutputEncoding=UTF8：PowerShell 5 默认按控制台代码页(GBK)输出，中文会变乱码
     execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
       `& { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; & '${ps1}' -NoPause -Actor console }`],
-      { timeout: target === 'online' ? 120_000 : 30_000, windowsHide: true, maxBuffer: 1024 * 256 },
+      { timeout: 120_000, windowsHide: true, maxBuffer: 1024 * 256 },
       (err, stdout, stderr) => {
         const out = String(stdout || '').trim().split(/\r?\n/).filter(Boolean).slice(-8);
         const fail = String(stderr || '').trim().split(/\r?\n/).filter(Boolean).slice(-3);

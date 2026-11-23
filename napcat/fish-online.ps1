@@ -20,8 +20,10 @@ if ($fishQQ) {
 } else {
     Start-Process -FilePath $bat -WorkingDirectory (Join-Path $HERE 'unpacked')
 }
-Write-Host '[上线] 拉起 watchdog（最小化窗口，别关它）...'
-Start-Process -WindowStyle Minimized -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList ('"' + (Join-Path $HERE 'watchdog.mjs') + '"')
+Write-Host '[上线] 拉起 watchdog（隐藏窗口，无界面不可误关）...'
+# Hidden（原 Minimized）：可见的最小化窗口会被误点关闭、也随桌面异常（如 explorer 崩溃重启）飘没——
+# 2026-11-23 20:37 事故里 watchdog 无声消失后无人拉起 NapCat；隐藏窗口更抗折腾
+Start-Process -WindowStyle Hidden -FilePath 'C:\Program Files\nodejs\node.exe' -ArgumentList ('"' + (Join-Path $HERE 'watchdog.mjs') + '"')
 Write-Host '[上线] 检查适配器...'
 $adapter = Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { ([string]$_.CommandLine) -match 'fish-adapter' }
 if ($adapter) {

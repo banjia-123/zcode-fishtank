@@ -907,7 +907,7 @@ async function openModeModal() {
   }
   $('#mode-body').innerHTML = `<div class="mode-pre">${checks.map(([ok, text]) =>
     `<div class="p"><span class="${ok ? 'ok' : 'bad'}">${ok ? '✓' : '✗'}</span><span>${esc(text)}</span></div>`).join('')}
-    <div class="p"><span>↻</span><span>${target === 'online' ? '将依次拉起 NapCat → watchdog → 适配器，约 60~90 秒后鱼上线' : '将停止 watchdog → NapCat → 适配器 → app-server（不动主号 QQ）'}</span></div>
+    <div class="p"><span>↻</span><span>${target === 'online' ? '将依次拉起 NapCat → watchdog → 适配器，约 60~90 秒后鱼上线' : '将停止 watchdog → NapCat → 适配器 → app-server → 控制台（不动主号 QQ）'}</span></div>
   </div><div class="mode-out hidden" id="mode-out"></div>`;
   $('#mode-go').textContent = target === 'online' ? '上线' : '下线';
   $('#mode-go').dataset.target = target;
@@ -929,8 +929,10 @@ async function execMode() {
     if (!d.ok) {
       toast(`${target === 'online' ? '上线' : '下线'}失败（退出码 ${d.exitCode ?? '?'}）`);
     } else if (target === 'offline') {
-      out.textContent += '\n✓ 鱼已下线（全家桶已全部停止）';
-      toast('鱼已下线');
+      // 下线是 detach 发起即返回（脚本最后一步会停掉控制台自身，等不到完成回调）——
+      // 页面失联属预期；成败以操作流水（ops）里的 offline 记录为准
+      out.textContent += '\n✓ 下线流程已发起——全家桶停止后控制台也会退出，本页面失联属预期（上线时会自动拉回）。';
+      toast('下线流程已发起');
     } else {
       // 上线：适配器就绪 ≠ 鱼上线——轮询 WS 连接状态，给确定结论
       out.textContent += '\n[确认] 等待鱼连上 QQ（NapCat 快速登录 + WS 重连，约 60~90 秒）…';

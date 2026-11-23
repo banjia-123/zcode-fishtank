@@ -37,13 +37,6 @@ if ($cli) {
 } else {
     Write-Host '  无 app-server 进程（patrol 未启用或已退出）'
 }
-Write-Host '[下线] 正在关闭控制台（127.0.0.1:3201）...'
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
-    ([string]$_.CommandLine) -match 'console\\server\.mjs'
-} | ForEach-Object {
-    Stop-Process -Id $_.ProcessId -Force
-    Write-Host ("  已关控制台 PID " + $_.ProcessId)
-}
 # 等适配器端口释放（最多 5s；契约：停完必须验端口，不留半死状态）
 $portFree = $false
 $deadline = (Get-Date).AddSeconds(5)
@@ -52,13 +45,25 @@ while ((Get-Date) -lt $deadline -and -not $portFree) {
     if (-not $listen) { $portFree = $true } else { Start-Sleep -Milliseconds 300 }
 }
 
-# 操作流水（ops.jsonl 由脚本自己写，控制台只读）
+# 操作流水（ops.jsonl 由脚本自己写，控制台只读）——必须在关控制台之前落账：
+# 2026-11-23 20:37 事故：脚本从控制台 spawn，跑到"杀控制台"一步时连带中断，
+# 流水没写、端口没验、页面还报"下线失败"。顺序改为：实质工作 → 记账 → 最后才碰控制台。
 $opsPath = Join-Path $PKG 'fish-adapter\state\ops.jsonl'
 try {
     New-Item -ItemType Directory -Force -Path (Split-Path $opsPath) | Out-Null
     $op = [ordered]@{ ts = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); actor = $Actor; action = 'offline'; ok = $portFree; ms = [int]$sw.ElapsedMilliseconds; stage = 'stopped'; err = $null; detail = @{ portFree = $portFree } }
     [System.IO.File]::AppendAllText($opsPath, ($op | ConvertTo-Json -Compress -Depth 4) + "`n", (New-Object System.Text.UTF8Encoding($false)))
 } catch { }
+
+# 关控制台放最后（弑父步骤殿后）：此刻鱼相关进程已全停、流水已落盘，
+# 即使脚本在此被连带终止也无实质损失；控制台侧已改为 detach 发起（见 server.mjs）。
+Write-Host '[下线] 正在关闭控制台（127.0.0.1:3201）...'
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object {
+    ([string]$_.CommandLine) -match 'console\\server\.mjs'
+} | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force
+    Write-Host ("  已关控制台 PID " + $_.ProcessId)
+}
 
 Write-Host ''
 Write-Host '[下线] 鱼已彻底下班：NapCat / watchdog / 适配器 / app-server 全部停止。'
