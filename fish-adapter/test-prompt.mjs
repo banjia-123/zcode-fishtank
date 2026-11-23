@@ -1,5 +1,6 @@
 // S2-E/S3-A 离线测试：唤醒报文合成器（wake/prompt.mjs）
 // 覆盖：persona 内嵌 / 段提取去重声明 / must 与 tier2 提示 / persona 缺失不炸 / 私聊段 / 便签注入位置
+import './test-setup.mjs';
 import { buildPrompt } from './wake/prompt.mjs';
 import { appendNote } from './lib/sticky.mjs';
 import { chatKeyToPeerKey } from './lib/peer-store.mjs';
@@ -35,7 +36,7 @@ try {
   // P2 多条拼批
   const p2 = buildPrompt({}, [
     mkMsg('<group_message from="阿明" uid="1">早</group_message>'),
-    mkMsg('<group_message from="莲华" uid="2">吃什么</group_message>'),
+    mkMsg('<group_message from="阿华" uid="2">吃什么</group_message>'),
   ], { personaDir: dir });
   ok(p2.includes('uid="1"') && p2.includes('uid="2"'), 'P2 多条消息都在');
   ok((p2.match(/<group_message/g) ?? []).length === 2, 'P2b 两段完整');
