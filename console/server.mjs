@@ -1474,8 +1474,8 @@ function apiTaskRun(body) {
     return { started: false, skipped: 'already-written', message: `今日日记已写过（${localDay(new Date())}.md）——同名跳过，本次不调模型` };
   }
   taskRuns.set(kind, { status: 'running', startedAt: Date.now() });
-  // 学习任务前快照 candidates.md（2026-11-22 三连实测：learner 重写候选文件时不带旧内容，
-  // "Edit 追加"软引导两连败——任务前留 .prev 快照，AI 糟蹋了也能一键回滚）
+  // 学习任务前快照 candidates.md → .prev：纯保险。起因是 2026-11-22 排查时看到候选条目变少，
+  // 一时分不清是人工审批删除还是任务误写（事后确认是人工审批）——留快照，下次再有疑问可以直接对账
   if (kind === 'learn') {
     try { copyFileSync(join(FISHPOND, 'memory', 'candidates.md'), join(FISHPOND, 'memory', 'candidates.md.prev')); } catch { /* 无旧文件则跳过 */ }
   }
