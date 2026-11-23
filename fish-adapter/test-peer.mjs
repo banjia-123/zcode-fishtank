@@ -2,6 +2,7 @@
 // 跑法：node test-peer.mjs（纯本地，不碰 NapCat/ZCode/真实文件）
 // 覆盖：debounce 攒批 / 窗口重置 / must 短窗 / must 全量 flush / 满 N 立即 flush /
 //       D9 排序 / sweep 兜底 / 空缓冲无害 / handler 异常不反噬 / flush 后按群释放 / 短窗传播
+import './test-setup.mjs'; // peer.mjs 的 log() 会写 ROOT_DIR/logs——指向临时目录
 import { createPeers } from './lib/peer.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -1,5 +1,6 @@
 // S2-C 离线测试：名字三档（name-tier.mjs）+ tier2 退避 + peer-store
-// 跑法：node test-name-tier.mjs（退避用例写 state/peers/g_990x.json，测试后清理）
+// 跑法：node test-name-tier.mjs（退避用例写 state/peers/g_990x.json，测试后清理；state 在一次性临时目录，见 test-setup.mjs）
+import './test-setup.mjs';
 import { detectNameTier, isNameMuted, noteNameOutcome } from './lib/name-tier.mjs';
 import { readPeer, chatKeyToPeerKey } from './lib/peer-store.mjs';
 import { rmSync } from 'node:fs';

@@ -1,6 +1,7 @@
 // 防刷屏冒烟测试：段数收缩 / busy 收缩 / 字数闸门 / 段间延迟 / 5min 滚动窗口 defer / 回归
 // v6：群号与 message_id 换新（test-outbound-v2 的 state 落盘会跨进程泄漏，这里全部错开）；
 //     T3 断言改按文本字数统计；T4 写 outbox 前先建目录
+import { cleanOnExit } from './test-setup.mjs';
 import { mkdtempSync, writeFileSync, existsSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,7 +11,8 @@ import { startOutboxPolling } from './lib/bridge.mjs';
 import { ROOT_DIR } from './lib/util.mjs';
 
 // —— 跨进程状态隔离（D13 落盘副作用）：counters.json 的 dailyCount/roll 窗口会被上一轮
-//    测试写进盘并被本轮读回（T4/T6 的 5min 窗口直接满格）。备份→清场→测后恢复
+//    测试写进盘并被本轮读回（T4/T6 的 5min 窗口直接满格）。备份→清场→测后恢复。
+//    ROOT_DIR 现已指向一次性临时目录（test-setup.mjs），这段只作兜底保留
 const COUNTERS = join(ROOT_DIR, 'state', 'counters.json');
 const COUNTERS_BAK = COUNTERS + '.test-bak';
 const hadCounters = existsSync(COUNTERS);
@@ -18,6 +20,7 @@ if (hadCounters) copyFileSync(COUNTERS, COUNTERS_BAK);
 if (hadCounters) rmSync(COUNTERS);
 
 const tmp = mkdtempSync(join(tmpdir(), 'fishflood-'));
+cleanOnExit(tmp);
 const cfg = {
   onebot: { selfId: '10000' },
   bridge: { mode: 'file', fishpondDir: tmp.replace(/\\/g, '/') },

@@ -1,6 +1,7 @@
 // S3-A 离线测试：每群便签（sticky.mjs）
 // 覆盖：群 12/私聊 20 上限从头裁 / 单条截 60 字 / 空便签渲染为空 / 注入格式 /
 //       >6h 间隔提示行 / 与 nameSoft 同文件共存
+import './test-setup.mjs';
 import { appendNote, recentNotes, renderNotes } from './lib/sticky.mjs';
 import { readPeer, updatePeer, chatKeyToPeerKey } from './lib/peer-store.mjs';
 import { rmSync } from 'node:fs';

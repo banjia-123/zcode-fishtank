@@ -1,10 +1,13 @@
 // 工具集：日志、审计、OneBot 消息文本化、属性转义、配置加载
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const ROOT_DIR = dirname(dirname(fileURLToPath(import.meta.url))); // fish-adapter/
+// fish-adapter/ 自身。测试经环境变量 FISH_ADAPTER_ROOT 指到一次性临时目录（见 test-setup.mjs）；生产进程不设该变量
+export const ROOT_DIR = process.env.FISH_ADAPTER_ROOT
+  ? resolve(process.env.FISH_ADAPTER_ROOT)
+  : dirname(dirname(fileURLToPath(import.meta.url)));
 const LOG_DIR = join(ROOT_DIR, 'logs');
 try { mkdirSync(LOG_DIR, { recursive: true }); } catch { /* 已存在 */ }
 

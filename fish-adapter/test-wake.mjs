@@ -2,10 +2,13 @@
 // 覆盖：协议往返 / SILENT / turn-failed / 超时 / 并发闸 / 同群串行 / 熔断 / 限额 /
 //       静默时段 / 最小间隔 / 崩溃重启 / wake.jsonl 留痕
 // 注意：会写 state/wake-counters.json（测前备份测后恢复）和 logs/wake.jsonl（[test] 标记行）
+//       ——ROOT_DIR 已指向一次性临时目录（test-setup.mjs），不碰生产文件
+import './test-setup.mjs';
 import { createAppServerClient } from './wake/app-server.mjs';
 import { createWakeSafe } from './wake/safe.mjs';
 import { readFileSync, writeFileSync, existsSync, copyFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ROOT_DIR } from './lib/util.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -23,7 +26,8 @@ if (hadCounters) copyFileSync(COUNTERS, BAK);
 
 const baseCfg = {
   patrol: {
-    cliPath: join(ROOT_DIR, 'wake', 'fake-app-server.mjs'),
+    // 替身是源码文件：按测试文件自身位置定位，不走 ROOT_DIR（隔离后它指向一次性临时目录）
+    cliPath: join(dirname(fileURLToPath(import.meta.url)), 'wake', 'fake-app-server.mjs'),
     batchWindowMs: 100, mustWindowMs: 50,
     minWakeIntervalMs: 0,          // 默认用例不受间隔影响
     maxDailyWakes: 1000,

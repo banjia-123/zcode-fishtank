@@ -1,18 +1,19 @@
 // T2 出站结构化离线用例（改造任务书 v6 S1.5）：新格式 / 老格式并存 / 审计双扫 / 三级兜底 /
 // 字段校验（D15）/ 部分成功（D4b）/ 计数落盘（D13）/ 审计脱敏（D12）。不起真进程，mock OneBot。
 // 跑法：node test-outbound-v2.mjs，退出码 0 = 全过
+import { STATE_ROOT, cleanOnExit } from './test-setup.mjs';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { createInbound, isBusy } from './lib/inbound.mjs';
 import { createOutbound } from './lib/outbound.mjs';
 import { parseOutboxBody, startOutboxPolling } from './lib/bridge.mjs';
 
-const ADAPTER_ROOT = join(dirname(fileURLToPath(import.meta.url)));
-const AUDIT_LOG = join(ADAPTER_ROOT, 'logs', 'audit.log');
+// 审计日志、计数器都落在 STATE_ROOT（一次性临时目录）下——测试不碰生产文件
+const AUDIT_LOG = join(STATE_ROOT, 'logs', 'audit.log');
 
 const tmp = mkdtempSync(join(tmpdir(), 'fishv2-'));
+cleanOnExit(tmp);
 const cfg = {
   onebot: { selfId: '10000' },
   bridge: { mode: 'file', fishpondDir: tmp.replace(/\\/g, '/') },
@@ -232,7 +233,7 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
 
 // D13 · 计数器落盘：发送成功后 state/counters.json 存在且含当日计数
 {
-  const countersFile = join(ADAPTER_ROOT, 'state', 'counters.json');
+  const countersFile = join(STATE_ROOT, 'state', 'counters.json');
   ok(existsSync(countersFile), 'D13a counters.json 落盘');
   const o = JSON.parse(readFileSync(countersFile, 'utf8'));
   ok(typeof o.dailyCount === 'number' && o.dailyCount > 0 && o.day === `${new Date().getFullYear()}-${new Date().getMonth() + 1}-${new Date().getDate()}`, 'D13b 计数与日期正确', JSON.stringify(o).slice(0, 120));
