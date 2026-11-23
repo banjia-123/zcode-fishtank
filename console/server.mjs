@@ -449,6 +449,9 @@ const SCHEMA = {
   'tasks.diaryModel.providerId': { type: 'string', max: 60 },
   'tasks.diaryModel.modelId': { type: 'string', max: 60 },
   'tasks.diaryModel.reasoningLevel': { type: 'enum', values: ['low', 'medium', 'high'] },
+  'tasks.selfCheckModel.providerId': { type: 'string', max: 60 },
+  'tasks.selfCheckModel.modelId': { type: 'string', max: 60 },
+  'tasks.selfCheckModel.reasoningLevel': { type: 'enum', values: ['low', 'medium', 'high'] },
   'private.maxPerDay': { type: 'int', min: 1, max: 200 },
   'maintenance.pruneAfterMin': { type: 'int', min: 5, max: 1440 },
   'maintenance.activeGraceMin': { type: 'int', min: 1, max: 120 },
@@ -1530,7 +1533,7 @@ function apiTaskStatus() {
       todayMsgs, streak, missing,
     };
   } catch { /* 无 diary 目录不显示 */ }
-  const models = { learn: effectiveTaskModel('learn'), diary: effectiveTaskModel('diary') }; // 当前生效模型（config ?? 默认快照）
+  const models = { learn: effectiveTaskModel('learn'), diary: effectiveTaskModel('diary'), selfcheck: effectiveTaskModel('selfcheck') }; // 当前生效模型（config ?? 默认快照；selfcheck 无默认，缺配置 = null = 跟随巡逻）
   return { tasks: { runs: withDiag, backlog, diaryBacklog, vocabMtime, models } };
 }
 

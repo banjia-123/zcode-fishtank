@@ -655,6 +655,9 @@ const FIELD_DEFS = [
   { path: 'tasks.diaryModel.providerId', label: '日记·供应商', type: 'provider', trio: 'diary', trioLabel: '日记任务模型', group: 3, hint: '「写今日日记」按钮用；不配走默认 GLM-5.3-Flash/low' },
   { path: 'tasks.diaryModel.modelId', label: '日记·模型', type: 'model', provPath: 'tasks.diaryModel.providerId', trio: 'diary', group: 3 },
   { path: 'tasks.diaryModel.reasoningLevel', label: '日记·档位', type: 'enum', values: ['low', 'medium', 'high'], trio: 'diary', group: 3 },
+  { path: 'tasks.selfCheckModel.providerId', label: '自检·供应商', type: 'provider', trio: 'selfcheck', trioLabel: '自检模型', group: 3, hint: '每小时工具面自检用；不配跟随聊天模型，改完下个自检周期生效（无需重启）' },
+  { path: 'tasks.selfCheckModel.modelId', label: '自检·模型', type: 'model', provPath: 'tasks.selfCheckModel.providerId', trio: 'selfcheck', group: 3 },
+  { path: 'tasks.selfCheckModel.reasoningLevel', label: '自检·档位', type: 'enum', values: ['low', 'medium', 'high'], trio: 'selfcheck', group: 3 },
   { path: 'bannedWords', label: '禁词', type: 'str-list', group: 4, hint: '每行一个，命中整条丢弃并审计' },
   { path: 'audit.blockPrivateIP', label: '拦内网 IP', type: 'bool', group: 4, hint: '误伤率高（聊路由器会中招），默认关' },
   { path: 'onebot.accessToken', label: 'NapCat 令牌', type: 'secret', group: 4, hint: '显示 **** 时保持原样即不改' },
@@ -1175,7 +1178,7 @@ async function loadOps() {
     $('#ops-proc').innerHTML = [
       ['状态', `<span class="send-ok">在线</span>`], ['PID', h.pid], ['运行时长', up >= 60 ? `${Math.floor(up / 60)} 小时 ${up % 60} 分` : `${up} 分钟`],
       ['模式', h.mode], ['WS 连 NapCat', h.patrol?.napcatConnected ? '✓ 已连接' : '✗ 未连接'],
-      ['工具面自检', h.patrol?.toolsOk === false ? '✗ 熔断中' : '✓ 正常'], ['app-server', h.patrol?.appServerAlive ? '存活' : '未拉起'],
+      ['工具面自检', `${h.patrol?.toolsOk === false ? '✗ 熔断中' : '✓ 正常'} · ${h.patrol?.selfCheckModel ? `${h.patrol.selfCheckModel.modelId}/${h.patrol.selfCheckModel.reasoningLevel ?? '默认档'}` : '跟随聊天'}`], ['app-server', h.patrol?.appServerAlive ? '存活' : '未拉起'],
     ].map(([k, v]) => `<div class="side-card-row" style="display:flex;justify-content:space-between;padding:6px 0;font-size:11.5px;border-bottom:1px solid rgba(36,49,56,.5)"><span class="k" style="color:var(--dim)">${k}</span><span style="font-family:var(--mono);font-size:11px;color:#b9c9d1">${v}</span></div>`).join('');
     const w = h.quotas?.wakes, s = h.quotas?.says;
     $('#ops-quota').innerHTML = w && s

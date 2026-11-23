@@ -169,8 +169,15 @@ export function createAppServerClient(cfg) {
     }
   }
 
-  async function wakeOnceRaw(prompt, { timeoutMs = 90_000, attachments } = {}) {
+  // modelSelection（按次覆盖，2026-11-23 自检模型用）：覆盖值优先，缺省回落客户端创建时的巡逻模型快照；
+  // 两种形状都认——扁平 reasoningLevel（config 形）或 options.reasoningLevel（协议形）
+  async function wakeOnceRaw(prompt, { timeoutMs = 90_000, attachments, modelSelection } = {}) {
     await ensure();
+    const m = modelSelection ?? model;
+    const msel = m.providerId && m.modelId ? { modelSelection: {
+      providerId: m.providerId, modelId: m.modelId,
+      ...(m.reasoningLevel || m.options?.reasoningLevel ? { options: { reasoningLevel: m.reasoningLevel ?? m.options.reasoningLevel } } : {}),
+    } } : {};
     const created = await request('session/create', {
       workspace: { workspacePath: WORKSPACE, workspaceKey: WORKSPACE },
     });
@@ -214,13 +221,7 @@ export function createAppServerClient(cfg) {
           sessionId,
           content: prompt,
           ...(attachments?.length ? { attachments } : {}),
-          ...(model.providerId && model.modelId
-            ? { modelSelection: {
-                providerId: model.providerId,
-                modelId: model.modelId,
-                ...(model.reasoningLevel ? { options: { reasoningLevel: model.reasoningLevel } } : {}),
-              } }
-            : {}),
+          ...msel,
           toolDenylist: DENY_ALL,
         }, timeoutMs).catch((e) => { cleanup(); reject(e); });
       });

@@ -4,7 +4,7 @@
 //       ZCode 出站回调 → :3200/zcode → outbound（验签/过滤/审计/限额）→ NapCat HTTP
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
-import { existsSync, appendFileSync } from 'node:fs';
+import { existsSync, appendFileSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, log } from './lib/util.mjs';
 import { OneBotClient } from './lib/onebot.mjs';
@@ -21,6 +21,27 @@ import { startOutboxPolling, ensureBridgeDirs, sweepInboxArchive, sweepEmojiTras
 import { rotateOversizedLogs } from './lib/rotate.mjs';
 
 const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // adapter.mjs → fish-adapter/ → 包根
+
+// —— 自检模型（2026-11-23）：config.tasks.selfCheckModel，缺省 null = 跟随巡逻模型（现状）。
+// 现读 + mtime 缓存（同 outbound 的 emojiGateState 模式）——控制台改完下一个自检周期即生效，无需重启。
+// 模块级（非巡逻闭包内）：/stats 端点与 toolSelfCheck 都要用
+let scmCache = { mtime: 0, val: null };
+function selfCheckModel() {
+  try {
+    // 注意：adapter.mjs 的 PKG_ROOT 是两层 dirname = 工作区根（部署布局：fish-adapter 直接在工作区下），
+    // 配置文件在 fish-adapter/ 里——按本文件位置取一层 dirname 才对（同 TASK_USAGE_PATH 的写法）
+    const p = join(dirname(fileURLToPath(import.meta.url)), 'config.json');
+    const st = statSync(p);
+    if (st.mtimeMs === scmCache.mtime) return scmCache.val;
+    const c = JSON.parse(readFileSync(p, 'utf8')).tasks?.selfCheckModel;
+    const m = c && c.providerId && c.modelId ? {
+      providerId: String(c.providerId), modelId: String(c.modelId),
+      ...(c.reasoningLevel ? { reasoningLevel: String(c.reasoningLevel) } : {}),
+    } : null;
+    scmCache = { mtime: st.mtimeMs, val: m };
+    return m;
+  } catch { return null; }
+}
 
 const cfg = loadConfig();
 const FILE_MODE = cfg.bridge?.mode === 'file';
@@ -88,26 +109,28 @@ if (PATROL) {
   async function toolSelfCheck() {
     try {
       const deny = new Set(DENY_ALL);
-      const r1 = await wakeClient.wakeOnce(TOOL_AUDIT_PROMPT, { timeoutMs: 30_000 });
+      const scm = selfCheckModel();
+      const mTag = `（模型 ${scm ? `${scm.modelId}/${scm.reasoningLevel ?? '默认档'}` : '跟随巡逻'}）`;
+      const r1 = await wakeClient.wakeOnce(TOOL_AUDIT_PROMPT, { timeoutMs: 30_000, ...(scm ? { modelSelection: scm } : {}) });
       logProbeUsage(r1.usage);
       const listed1 = parseToolList(r1.content);
       const missing1 = listed1.filter((n) => !deny.has(n));
       if (!missing1.length) {
         toolsOk = true;
-        log('patrol', `工具面自检通过（模型自述 ${listed1.length} 项，全部在黑名单内）`);
+        log('patrol', `工具面自检通过${mTag}：模型自述 ${listed1.length} 项，全部在黑名单内`);
         return;
       }
       // 名单外出现：可能是幻觉——立即二次确认，两轮都报的才算真工具
-      const r2 = await wakeClient.wakeOnce(TOOL_AUDIT_PROMPT, { timeoutMs: 30_000 });
+      const r2 = await wakeClient.wakeOnce(TOOL_AUDIT_PROMPT, { timeoutMs: 30_000, ...(scm ? { modelSelection: scm } : {}) });
       logProbeUsage(r2.usage);
       const missing2 = parseToolList(r2.content).filter((n) => !deny.has(n));
       const confirmed = missing1.filter((n) => missing2.includes(n));
       if (confirmed.length) {
         toolsOk = false;
-        log('patrol', `WARN 工具面自检失败：两轮自述均出现名单外工具 [${confirmed.join(', ')}]（一轮 ${missing1.join(', ')} / 二轮 ${missing2.join(', ') || '无'}）—— patrol 已熔断（补 DENY_ALL 后恢复）`);
+        log('patrol', `WARN 工具面自检失败${mTag}：两轮自述均出现名单外工具 [${confirmed.join(', ')}]（一轮 ${missing1.join(', ')} / 二轮 ${missing2.join(', ') || '无'}）—— patrol 已熔断（补 DENY_ALL 后恢复）`);
       } else {
         toolsOk = true;
-        log('patrol', `工具面自检：一轮名单外 [${missing1.join(', ')}] 未在二轮复现——判定自述噪声，不熔断（真实面无漏禁）`);
+        log('patrol', `工具面自检${mTag}：一轮名单外 [${missing1.join(', ')}] 未在二轮复现——判定自述噪声，不熔断（真实面无漏禁）`);
       }
     } catch (e) {
       log('patrol', `工具面自检未完成（${e.message}）—— 保持上次状态 toolsOk=${toolsOk}`);
@@ -223,6 +246,7 @@ const server = createServer((req, res) => {
             peers: patrolPeers ? patrolPeers.size() : 0,
             buffers: patrolPeers ? patrolPeers.pending() : [],
             appServerAlive: wakeClient ? wakeClient.isAlive() : null,
+            selfCheckModel: selfCheckModel(), // null = 跟随巡逻模型（控制台健康面板显示用）
           },
           quotas: {
             wakes: wakeStats ? wakeStats() : null, // { active, queued, dailyWakes, maxDailyWakes, privateWakes, privateMaxPerDay }
