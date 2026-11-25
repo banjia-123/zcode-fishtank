@@ -39,7 +39,7 @@ zcode-fishtank/            ← 本包，放到任意目录（路径可含中文�
    - `<鱼QQ号>` / `<鱼名>` / `<测试群号>` / `<你的QQ号>`
    - **占位符没填完启动会直接拒绝（fail-closed），这是特性不是 bug**
 
-3. **建鱼的工作区**：复制 `fishpond-template/` 整目录为包根下 `fishpond/`，编辑 `persona-template.md`（P2 生死关，慢慢写），任务书里的 `<fishpond目录>`/`<鱼号>`/`<鱼名>` 替换为实际值。
+3. **建鱼的工作区**：复制 `fishpond-template/` 整目录为包根下 `fishpond/`，编辑 `persona-template.md`（P2 生死关，慢慢写）。模板里的占位符（`<鱼QQ号>`/`<你的QQ号>`/`<鱼名>` 等）**无需手动替换**——唤醒/任务触发时按 config.json 运行时自动填充。
 
 4. **装 guard**：按指南 §P0.5 在 ZCode 里把 `guard/fish-guard.mjs` 注册为 fishpond 工作区的 PreToolUse hook，走一次信任流程；`allow-sessions.example.json` 复制为 `allow-sessions.json`（施工期把你自己的会话 ID 加进去，正式运行清空）。
 

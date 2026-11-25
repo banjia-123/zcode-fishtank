@@ -14,6 +14,7 @@ import { readFileSync, statSync, openSync, readSync, closeSync, writeFileSync, u
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
+import { fillPlaceholders, toPlaceholders } from '../fish-adapter/lib/placeholder.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = dirname(HERE);
@@ -1307,6 +1308,24 @@ function writeTasksManual(data) {
   renameSync(tmp, TASKS_MANUAL);
 }
 
+// 占位符值表（任务书运行时渲染 + 归档净化共用）：真实值只从 config.json 与目录常量来——
+// 任务书/快照里只写 <fishpond目录>/<鱼QQ号> 等占位符，发模型前现填（fillPlaceholders），
+// 归档入库前反向洗净（toPlaceholders）。值缺失的键自动跳过（占位符保持原样，不瞎填）
+function placeholderValues() {
+  let c = {};
+  try { c = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch { /* 缺 config 占位符不渲染 */ }
+  return {
+    '<fishpond目录>': FISHPOND,
+    '<fish-adapter目录>': ADAPTER_DIR,
+    '<zcode数据目录>': join(homedir(), '.zcode'),
+    '<鱼QQ号>': c.onebot?.selfId ?? '',
+    '<鱼号>': c.onebot?.selfId ?? '',
+    '<你的QQ号>': c.ownerQQ ?? '',
+    '<鱼名>': c.botName ?? '',
+    '<群号>': (c.allow?.groups ?? [])[0] ?? '',
+  };
+}
+
 // POST /api/tasks/remove {id, confirm:'REMOVE'}：快照归档 → 删除 automations 行（runs 历史保留）
 // 这是全控制台唯一一处直写任务库（用户明确要求的删除；当前四条均已 paused，无调度中风险）
 function apiTaskRemove(body) {
@@ -1322,7 +1341,9 @@ function apiTaskRemove(body) {
     snap.archivedAt = new Date().toISOString();
     snap.tasks[kindOf(row.title) + '_' + row.automation_id.slice(-6)] = {
       id: row.automation_id, title: row.title, cron: row.cron_expr,
-      prompt: row.prompt, modelSelection: (() => { try { return JSON.parse(row.model_selection ?? 'null'); } catch { return null; } })(),
+      // 归档净化：库里的 prompt 可能带真实值（当初建任务时写的），入快照前反向换成占位符——
+      // 快照是运行时渲染的模板源，也是控制台页直接展示的内容，不能存实值
+      prompt: toPlaceholders(row.prompt, placeholderValues()), modelSelection: (() => { try { return JSON.parse(row.model_selection ?? 'null'); } catch { return null; } })(),
       removedAt: new Date().toISOString(),
     };
     writeTasksManual(snap);
@@ -1352,6 +1373,9 @@ async function runTaskAsync(kind) {
       return;
     }
   }
+  // 占位符渲染：快照/任务书只写占位符，真实值（路径/QQ号/鱼名）发模型前现填——
+  // 两个来源（快照/回落文件）在此已汇成同一个 prompt 变量，一处渲染全覆盖
+  prompt = fillPlaceholders(prompt, placeholderValues());
   let cliPath = '';
   try { cliPath = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).patrol.cliPath ?? ''; } catch { /* 读不到后面报 */ }
   if (!cliPath) { taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: 'config 里没有 patrol.cliPath' }); return; }

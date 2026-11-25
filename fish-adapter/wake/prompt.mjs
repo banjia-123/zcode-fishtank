@@ -5,6 +5,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderNotes } from '../lib/sticky.mjs';
+import { fillPlaceholders } from '../lib/placeholder.mjs';
 
 const SEG_RE = /<(?:group|private)_message[\s\S]*?<\/(?:group|private)_message>/g;
 
@@ -30,7 +31,14 @@ function emojiDigest(personaDir) {
 export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
   let persona = '';
   try {
-    persona = readFileSync(join(personaDir, 'persona.md'), 'utf8').trim();
+    // persona 只写占位符（<鱼QQ号> 等），真实值在这里现填——模板天然干净，不依赖 sanitize
+    persona = fillPlaceholders(readFileSync(join(personaDir, 'persona.md'), 'utf8').trim(), {
+      '<鱼QQ号>': cfg.onebot?.selfId,
+      '<鱼号>': cfg.onebot?.selfId,
+      '<你的QQ号>': cfg.ownerQQ,
+      '<鱼名>': cfg.botName,
+      '<群号>': (cfg.allow?.groups ?? [])[0],
+    });
   } catch { /* persona 缺失也唤醒——人格靠记忆里的默认语气兜底，别因文件问题装死 */ }
 
   const segs = [];

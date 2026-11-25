@@ -28,4 +28,4 @@
 8. 只允许 Read/Glob/Write/Edit 工具且全部限定在 <fishpond目录>\ 目录内；禁止使用 Bash；禁止访问 fishpond 之外的任何路径；禁止生成任何要发送到 QQ 的内容
 ```
 
-> 使用：全文里的 <fishpond目录> / <鱼号> / <鱼名> 替换为实际值后，按文件头说明在 ZCode 建 automation。
+> 使用：占位符（<fishpond目录> / <鱼号> / <鱼名> 等）**无需手动替换**——控制台触发任务时按 config.json 运行时自动填充。按文件头说明在 ZCode 建 automation。

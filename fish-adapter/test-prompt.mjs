@@ -2,6 +2,7 @@
 // 覆盖：persona 内嵌 / 段提取去重声明 / must 与 tier2 提示 / persona 缺失不炸 / 私聊段 / 便签注入位置
 import './test-setup.mjs';
 import { buildPrompt } from './wake/prompt.mjs';
+import { fillPlaceholders, toPlaceholders } from './lib/placeholder.mjs';
 import { appendNote } from './lib/sticky.mjs';
 import { chatKeyToPeerKey } from './lib/peer-store.mjs';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
@@ -69,6 +70,32 @@ try {
   const p7b = buildPrompt({}, [mkMsg('<group_message from="a" uid="2">x</group_message>')], { personaDir: dir });
   ok(!p7b.includes('最近在聊什么'), 'P7d 不带 chatKey 无便签段（行为兼容）');
   try { rmSync(join(ROOT_DIR, 'state', 'peers', chatKeyToPeerKey(K) + '.json')); } catch { /* 无 */ }
+
+  // P8 persona 占位符运行时渲染（2026-11-25）：persona 只写占位符，真实值 buildPrompt 现填
+  const dir2 = mkdtempSync(join(tmpdir(), 'fish-ph-'));
+  try {
+    writeFileSync(join(dir2, 'persona.md'), '# 人格\n报文里的 **@<鱼QQ号>** 是在叫吾。<你的QQ号> 是自己人。', 'utf8');
+    const cfg8 = { onebot: { selfId: '12345' }, ownerQQ: '99999', botName: '鱼鱼', allow: { groups: ['777'] } };
+    const p8 = buildPrompt(cfg8, [mkMsg('<group_message from="a" uid="1">hi</group_message>')], { personaDir: dir2 });
+    ok(p8.includes('**@12345**') && p8.includes('99999 是自己人'), 'P8a persona 占位符被真实值替换');
+    ok(!p8.includes('<鱼QQ号>') && !p8.includes('<你的QQ号>'), 'P8b 渲染后无占位符残留');
+    // 值缺失：cfg 空对象 → 占位符保持原样（不瞎填不炸）
+    const p8b = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">hi</group_message>')], { personaDir: dir2 });
+    ok(p8b.includes('@<鱼QQ号>') && p8b.includes('<你的QQ号> 是自己人'), 'P8c 值缺失时占位符原样保留');
+    // 同义键：<鱼号> 与 <鱼QQ号> 等价（模板方言）
+    writeFileSync(join(dir2, 'persona.md'), '吾是<鱼名>，主人是<你的QQ号>，鱼号<鱼号>，群<群号>。', 'utf8');
+    const p8c = buildPrompt(cfg8, [mkMsg('<group_message from="a" uid="1">x</group_message>')], { personaDir: dir2 });
+    ok(p8c.includes('吾是鱼鱼') && p8c.includes('鱼号12345') && p8c.includes('群777'), 'P8d 同义键/鱼名/群号全渲染', p8c.slice(0, 40));
+  } finally { try { rmSync(dir2, { recursive: true, force: true }); } catch { /* 临时目录 */ } }
+
+  // P9 占位符纯函数：fill/to 双向、长值先换（路径不因 QQ 号数字串被切碎）
+  const vals = { '<fishpond目录>': 'D:/w/fishpond', '<鱼QQ号>': '12345', '<你的QQ号>': '99999' };
+  ok(fillPlaceholders('读 <fishpond目录>/logs 和 @<鱼QQ号>', vals) === '读 D:/w/fishpond/logs 和 @12345', 'P9a fill 多词');
+  ok(fillPlaceholders('缺 <群号> 值', vals) === '缺 <群号> 值', 'P9b 值缺失不替换');
+  const orig = 'Read D:/w/fishpond/memory/x.json 对主人（99999）@12345';
+  ok(toPlaceholders(orig, vals) === 'Read <fishpond目录>/memory/x.json 对主人（<你的QQ号>）@<鱼QQ号>', 'P9c to 反向净化');
+  ok(toPlaceholders('无值的 D:/other/path', vals) === '无值的 D:/other/path', 'P9d to 不认识的路径不动');
+  ok(fillPlaceholders(toPlaceholders(orig, vals), vals) === orig, 'P9e round-trip 往返无损');
 } finally {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败无妨（临时目录） */ }
 }

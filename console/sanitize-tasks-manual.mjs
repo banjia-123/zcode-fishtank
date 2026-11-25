@@ -18,8 +18,8 @@ let s = readFileSync(join(PKG, 'console', 'tasks-manual.json'), 'utf8');
 const BS = '\\';
 const ZC = 'zcode' + '工作区'; // 拆写：源码不直出完整本机路径
 // 本机路径（任意用户名）：正则覆盖 单斜杠/双斜杠/正斜杠 三种形态
-// zcode 与 工作区 之间分隔符可选（{0,2}）：实际目录名是连写的 zcode工作区，
-// 旧正则 {1,2} 强制要求分隔符 → 反斜杠真实路径 D:\zcode工作区\fishpond 全部漏洗（盲区根因）
+// zcode 与 工作区 之间分隔符可选（{0,2}）：实际部署目录名是这两段直接连写（无分隔符），
+// 旧正则 {1,2} 强制要求分隔符 → 反斜杠真实路径（连写目录名）全部漏洗（盲区根因，注释不直出路径）
 s = s.replace(/D:[/\\]{1,2}zcode[/\\]{0,2}工作区[/\\]{1,2}fishpond/g, '<fishpond目录>');
 s = s.replace(/D:[/\\]{1,2}zcode[/\\]{0,2}工作区[/\\]{1,2}fish-adapter/g, '<fish-adapter目录>');
 s = s.replace(/C:[/\\]{1,2}Users[/\\]{1,2}[^/\\:]+[/\\]{1,2}\.zcode/g, '<zcode数据目录>');
