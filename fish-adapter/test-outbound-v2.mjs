@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, unlink
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInbound, isBusy } from './lib/inbound.mjs';
-import { createOutbound } from './lib/outbound.mjs';
+import { createOutbound, typingDelayMs } from './lib/outbound.mjs';
 import { parseOutboxBody, startOutboxPolling } from './lib/bridge.mjs';
 
 // 审计日志、计数器都落在 STATE_ROOT（一次性临时目录）下——测试不碰生产文件
@@ -248,6 +248,27 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   const r2 = await outbound.processMessage([line, line, line].join('\n'), meta('500', 'r2.json'));
   const total = segs(b).reduce((acc, c) => acc + c.p.message.filter((x) => x.type === 'text').reduce((a, x) => a + x.data.text.length, 0), 0);
   ok(r2.action === 'sent' && total <= 160, '回归 老格式字数闸门仍生效', `total=${total}`);
+}
+
+// 拟真打字（2026-11-25）：typingDelayMs 纯函数边界——下限兼容旧断言（2b/T1b ≥1500ms），上限夹断，关闭分支回退旧节奏
+{
+  let inRange = true, overMin = false;
+  for (let k = 0; k < 100; k++) {
+    const d = typingDelayMs('随便一句话'.repeat(8), 0.15);
+    if (d < 1500 || d > 8000) inRange = false;
+    if (d > 8000) overMin = true;
+  }
+  ok(inRange, '拟真 100 次采样全部 ∈ [1500, 8000]', overMin ? '超上限' : '');
+  const d100 = typingDelayMs('x'.repeat(100), 0.15);
+  ok(d100 >= 1500 && d100 <= 8000, '拟真 100 字长行被 8000ms 上限夹断', `d=${d100}`);
+  let oldRange = true;
+  for (let k = 0; k < 100; k++) {
+    const d = typingDelayMs('同一句话', 0);
+    if (d < 1500 || d > 4000) oldRange = false;
+  }
+  ok(oldRange, '拟真 secPerChar=0 回退旧节奏 ∈ [1500, 4000]');
+  const dNaN = typingDelayMs('任何', Number.NaN);
+  ok(dNaN >= 1500 && dNaN <= 4000, '拟真 NaN 视为关闭，回退旧节奏', `d=${Math.round(dNaN)}`);
 }
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

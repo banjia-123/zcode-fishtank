@@ -10,6 +10,7 @@ import { basename, join } from 'node:path';
 import { bridgeDirs } from './bridge.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rand = (min, max) => min + Math.random() * (max - min);
 
 // —— 表情包（鱼发表情 v1）：三重防穿越校验（basename 化 / 扩展名白名单 / 存在性）——
 // v6 起拆成纯校验函数：老格式走 text 里 [表情: 文件名] 标记，新格式走 sticker 字段，共用同一套校验
@@ -71,6 +72,32 @@ function emojiGateState() {
     return gateCache.state;
   } catch { return { ...EMOJI_GATE_DEFAULT }; }
 }
+// —— 拟真打字节奏（2026-11-25，借鉴 dsh-sansan-qq 的 typingDelayMs）——
+// 段间延迟按上一行字数 × 打字速度算：长句等得久、短句快，外加构思抖动与 12% 概率手快。
+// 下限 1500ms 与旧算法下限一致（防洪节奏不变，测试 2b/T1b 断言零修改兼容）；
+// 上限 8000ms 防长行极端（60 字截断已物理限长）。
+// typingSecPerChar 现读 config（mtime 缓存，同 emojiGateState 模式）：≤0 或显式 0 = 回退旧随机节奏。
+const TYPING_FILE = EMOJI_GATE_FILE; // 同源：包根 config.json
+let typingCache = { mtime: 0, secPerChar: 0.15 };
+function typingSecPerChar() {
+  try {
+    const st = statSync(TYPING_FILE);
+    if (st.mtimeMs === typingCache.mtime) return typingCache.secPerChar;
+    const n = Number(JSON.parse(readFileSync(TYPING_FILE, 'utf8')).limits?.typingSecPerChar);
+    typingCache = { mtime: st.mtimeMs, secPerChar: n > 0 ? n : (n === 0 ? 0 : 0.15) };
+    return typingCache.secPerChar;
+  } catch { return 0.15; }
+}
+// 纯函数可单测：secPerChar 无效（≤0/NaN）走旧分支 1500~4000ms
+export function typingDelayMs(prevText, secPerChar) {
+  if (!(Number(secPerChar) > 0)) return 1500 + Math.random() * 2500;
+  const chars = Array.from(String(prevText ?? '')).length; // 码点数（emoji 代理对按 1）
+  let sec = rand(0.8, 2.2) + chars * secPerChar * rand(0.8, 1.2); // 构思 + 按字打
+  sec *= rand(0.85, 1.15); // 总抖动
+  if (Math.random() < 0.12) sec *= 0.5; // 偶尔手快
+  return Math.min(8000, Math.max(1500, Math.round(sec * 1000)));
+}
+
 function recentEmojiCount(cfg, chatKey, window) {
   try {
     const speak = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
@@ -405,8 +432,9 @@ export function createOutbound(cfg, onebot, inboundState) {
         if (r && r.status === 'ok') sent = 1; else lastErr = r;
       } else {
         for (let i = 0; i < segments.length; i++) {
-          // 拟人打字节奏：段间 1.5~4 秒随机延迟——同样的内容，六连发是刷屏，隔几秒蹦一句是聊天
-          if (i > 0) await sleep(1500 + Math.random() * 2500);
+          // 拟真打字：段间延迟按上一行字数 × 速度算（长句慢短句快，12% 手快）——
+          // 下限 1500ms 同旧算法（防洪节奏不变）；typingSecPerChar=0 可热切回旧随机
+          if (i > 0) await sleep(typingDelayMs(segments[i - 1], typingSecPerChar()));
           const message = [{ type: 'text', data: { text: segments[i] } }];
           if (i === segments.length - 1 && emojiSeg) message.push(emojiSeg);
           if (i === 0 && replyToId != null) message.unshift({ type: 'reply', data: { id: replyToId } }); // 引用只挂首条

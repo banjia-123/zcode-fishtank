@@ -80,7 +80,8 @@
     "maxWindow5MinMs": 300000,
     "maxSegments": 4,
     "busyMaxSegments": 2,
-    "maxTotalChars": 150
+    "maxTotalChars": 150,
+    "typingSecPerChar": 0.15
   },
   "bannedWords": [],
   "audit": {
