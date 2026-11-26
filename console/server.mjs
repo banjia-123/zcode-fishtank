@@ -1432,6 +1432,22 @@ async function runTaskAsync(kind) {
         appendFileSync(TASK_USAGE, JSON.stringify({ ts: new Date().toISOString(), kind, usage: extra.usage }) + '\n', 'utf8');
       } catch { /* 流水失败不影响任务结果 */ }
     }
+    // 学习游标越界钳制（2026-11-26 二犯，2634=2234+400 精确指纹：AI 拿 offset+limit 算游标
+    // 而非实际读到的行数，prompt 红线两犯无效——代码硬闸：任务完成后游标 > 实际行数即回拨+留痕）
+    if (status === 'done' && kind === 'learn') {
+      try {
+        const curPath = join(FISHPOND, 'memory', '.learner-cursor');
+        const cur = Number(readFileSync(curPath, 'utf8').trim());
+        const lines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
+        if (cur > lines) {
+          const tmp = curPath + '.tmp';
+          writeFileSync(tmp, String(lines), 'utf8');
+          renameSync(tmp, curPath);
+          logConsoleOp('learner-cursor-clamp', { from: cur, to: lines, note: 'AI 虚推（offset+limit 指纹），代码回拨' });
+          console.log(`[learner-clamp] 游标越界回拨: ${cur} → ${lines}`);
+        }
+      } catch { /* 校验失败不影响任务结果 */ }
+    }
   };
   const timer = setTimeout(() => {
     finish('error', `超过 ${Math.round(TASK_TIMEOUT_MS[kind] / 60000)} 分钟未完成（可能卡住——重试即可）`);
