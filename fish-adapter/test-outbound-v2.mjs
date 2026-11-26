@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInbound, isBusy } from './lib/inbound.mjs';
 import { createOutbound, typingDelayMs } from './lib/outbound.mjs';
+import { stripOsHead } from './lib/outbound.mjs';
 import { parseOutboxBody, startOutboxPolling } from './lib/bridge.mjs';
 
 // 审计日志、计数器都落在 STATE_ROOT（一次性临时目录）下——测试不碰生产文件
@@ -269,6 +270,15 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   ok(oldRange, '拟真 secPerChar=0 回退旧节奏 ∈ [1500, 4000]');
   const dNaN = typingDelayMs('任何', Number.NaN);
   ok(dNaN >= 1500 && dNaN <= 4000, '拟真 NaN 视为关闭，回退旧节奏', `d=${Math.round(dNaN)}`);
+}
+
+// OS 首段剥除（2026-11-26）：独白混进正文首段时剥段保留正文（11-22/11-26 两次实战形态）
+{
+  ok(stripOsHead('被 @ 了，得回。\n\n新图金发紫瞳，真不是灯。\n\n但不装懂。', 'g:1') === '新图金发紫瞳，真不是灯。\n\n但不装懂。', 'OS1a 被@独白首段剥除、正文保留');
+  ok(stripOsHead('有人叫吾，回一下。\n\n正经回复内容', 'g:1') === '正经回复内容', 'OS1b 有人叫吾形态剥除');
+  ok(stripOsHead('今天天气不错。\n\nsecond line', 'g:1') === '今天天气不错。\n\nsecond line', 'OS1c 非 OS 首段不剥');
+  ok(stripOsHead('被 @ 了，得回。', 'g:1') === '被 @ 了，得回。', 'OS1d 单段纯 OS 不剥（宁放过，prompt 反例兜）');
+  ok(stripOsHead('被 @ 了，得回。这话我记下了。', 'g:1') === '被 @ 了，得回。这话我记下了。', 'OS1e 超长首段不剥（>14 字非 OS）');
 }
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

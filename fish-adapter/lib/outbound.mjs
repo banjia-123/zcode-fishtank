@@ -98,6 +98,22 @@ export function typingDelayMs(prevText, secPerChar) {
   return Math.min(8000, Math.max(1500, Math.round(sec * 1000)));
 }
 
+// —— OS 首段剥除（2026-11-26）：模型的"内心 OS"（被 @ 了、有人叫吾、得回）偶尔混进正文首段——
+// 群友看到的是她的决策过程而非回复（11-22/11-26 两次实战）。特征：首段极短且是"叙述自己收到消息"
+// 的元语句。剥掉该段保留后续正常正文（比整条丢弃好——本次 89 字好内容差点陪葬）；无后续段则整条照发
+// （纯 OS 也可能是真想说的短话，宁放过不误杀，靠 prompt 反例兜）。
+const OS_HEAD_RE = /^(?:被\s*@\s*了?|有人?[在要]?[叫喊@]吾|得回[一-]?|该吾回)/;
+export function stripOsHead(text, chatKey) {
+  const segs = String(text ?? '').split(/\r?\n/);
+  if (segs.length <= 1) return text; // 单段不剥（可能是真短话）
+  const head = segs[0].trim();
+  if (head.length <= 14 && OS_HEAD_RE.test(head)) {
+    log('outbound', `os-head stripped → ${chatKey}: "${head.slice(0, 20)}"`);
+    return segs.slice(1).join('\n').trim();
+  }
+  return text;
+}
+
 function recentEmojiCount(cfg, chatKey, window) {
   try {
     const speak = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
@@ -374,6 +390,12 @@ export function createOutbound(cfg, onebot, inboundState) {
         ? (cfg.limits?.busyMaxSegments ?? 2)
         : (cfg.limits?.maxSegments ?? 4);
       const raw = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, maxSegs);
+      // OS 首段剥除：首段是"被 @ 了/得回"这类内心 OS 时去掉（正文在后续段）；新格式 lines 同样过这道
+      const cleaned = stripOsHead(raw.join('\n'), chatKey);
+      if (cleaned !== raw.join('\n')) {
+        const kept = cleaned.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, maxSegs);
+        if (kept.length) { raw.length = 0; raw.push(...kept); }
+      }
       // 总字数闸门：累计超限截断（至少保留 1 段），宁说一半不刷屏
       const maxChars = cfg.limits?.maxTotalChars ?? 150;
       let acc = 0;
