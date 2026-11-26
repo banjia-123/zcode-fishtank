@@ -1,7 +1,7 @@
 // 按需复核（2026-11-26）离线用例：imgpool 入池/TTL/上限挤旧/peer 隔离 + poolExtrasFor 触发判定/去重
 // 跑法：node test-imgpool.mjs，退出码 0 = 全过
 import './test-setup.mjs';
-import { recordImg, pickImgs, poolExtrasFor } from './lib/imgpool.mjs';
+import { recordImg, pickImgs, poolExtrasFor, sortByNewest } from './lib/imgpool.mjs';
 
 let pass = 0, fail = 0;
 function ok(cond, name, detail = '') {
@@ -36,6 +36,16 @@ ok(poolExtrasFor([mk('看图')], 'g:none', new Set()).length === 0, 'I5d 池空�
 
 // I6 与批内已有附件去重（同文件名不重附）
 ok(poolExtrasFor([mk('看图')], 'g:3', new Set(['y-1-img1.jpg'])).length === 0, 'I6a 批内已有的图不重复附带');
+
+// I7 串台修复：附件按文件名 ts 前缀从新到旧（稳定）——纯复核轮池图"旧前新后"与批内轮"新前旧后"语义统一
+{
+  const A = (filename) => ({ filename });
+  const out = sortByNewest([A('1795693887206-old-msg-img1.jpg'), A('1795693996546-new-msg-img1.jpg')]);
+  ok(out[0].filename.startsWith('1795693996546') && out[1].filename.startsWith('1795693887206'), 'I7a 时间戳大的（新图）排第一');
+  const same = sortByNewest([A('1795694000000-a-img1.jpg'), A('1795694000000-b-img1.jpg')]);
+  ok(same[0].filename.startsWith('1795694000000-a'), 'I7b 同时间戳保持原相对序（稳定排序）');
+  ok(sortByNewest([A('无时间戳.jpg')]).length === 1, 'I7c 无 ts 前缀的文件名不炸（按 0 参与排序）');
+}
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILED'}：${pass} 通过 / ${fail} 失败`);
 process.exit(fail === 0 ? 0 : 1);

@@ -12,7 +12,7 @@ import { createInbound } from './lib/inbound.mjs';
 import { dedupHas } from './lib/inbound.mjs';
 import { createOutbound } from './lib/outbound.mjs';
 import { createPeers } from './lib/peer.mjs';
-import { poolExtrasFor } from './lib/imgpool.mjs';
+import { poolExtrasFor, sortByNewest } from './lib/imgpool.mjs';
 import { createAppServerClient, DENY_ALL } from './wake/app-server.mjs';
 import { createWakeSafe } from './wake/safe.mjs';
 import { buildPrompt, fishpondDir, TOOL_AUDIT_PROMPT } from './wake/prompt.mjs';
@@ -166,7 +166,7 @@ if (PATROL) {
         return { kind: 'image', localPath: abs, filename: rel.split('/').pop(), mimeType: IMG_MIME[abs.split('.').pop().toLowerCase()] ?? 'image/jpeg' };
       } catch { return null; }
     };
-    const attachments = [];
+    let attachments = [];
     for (const m of batch) {
       for (const mm of String(m.text ?? '').matchAll(/\[图片[:：]\s*(attachments\/[^\]\s]+?\.(?:png|jpe?g|gif|webp))\]/gi)) {
         const a = mkImgAttach(mm[1]);
@@ -183,6 +183,9 @@ if (PATROL) {
       const a = mkImgAttach(`attachments/inbox/${fname}`);
       if (a) attachments.push(a);
     }
+    // 串台修复（2026-11-26）：统一"从新到旧"排序（文件名 ts 前缀降序）——纯复核轮池图
+    // 按入池序是旧前新后、批内图轮是新前旧后，两种"第一张"语义相反，她把新图题答成旧图角色
+    attachments = sortByNewest(attachments);
     const last = batch[batch.length - 1];
     const mustMsg = batch.find((m) => m.must) ?? last;
     const hadTier2 = batch.some((m) => m.nameTier === 2);

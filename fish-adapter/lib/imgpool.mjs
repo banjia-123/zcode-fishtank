@@ -35,3 +35,14 @@ export function poolExtrasFor(batch, chatKey, existingFilenames) {
     .map((rel) => rel.split('/').pop())
     .filter((f) => !known.has(f));
 }
+
+/**
+ * 附件统一排序（2026-11-26 串台修复）：按文件名时间戳前缀**从新到旧**（稳定排序）。
+ * 此前批内新图先、纯复核轮池图按入池序（旧前新后）——两种场景"第一张"语义相反，
+ * 模型把新图的题答成旧图的角色（她自己承认"图序反了"）。统一后任何场景
+ * "第一张 = 刚收到的"，与 prompt 指引的顺序约定配套。
+ */
+export function sortByNewest(attachments) {
+  const tsOf = (a) => Number(String(a?.filename ?? '').split('-')[0]) || 0;
+  return [...(attachments ?? [])].sort((a, b) => tsOf(b) - tsOf(a));
+}
