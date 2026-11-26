@@ -12,6 +12,7 @@ import { createInbound } from './lib/inbound.mjs';
 import { dedupHas } from './lib/inbound.mjs';
 import { createOutbound } from './lib/outbound.mjs';
 import { createPeers } from './lib/peer.mjs';
+import { poolExtrasFor } from './lib/imgpool.mjs';
 import { createAppServerClient, DENY_ALL } from './wake/app-server.mjs';
 import { createWakeSafe } from './wake/safe.mjs';
 import { buildPrompt, fishpondDir, TOOL_AUDIT_PROMPT } from './wake/prompt.mjs';
@@ -155,22 +156,32 @@ if (PATROL) {
     const prompt = buildPrompt(cfg, batch, { personaDir: P_DIR, chatKey });
     // 图片随行（2026-11-21：群图此前只进 prompt 字面标记、她看不到——协议 attachments 走本地路径由宿主读取）：
     // inbound 下载的图在 fishpond/attachments/，正则限定该前缀+图片扩展名（"下载失败"占位自动排除）
+    const IMG_MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
+    const mkImgAttach = (rel) => {
+      try {
+        const abs = join(P_DIR, rel);
+        // 附件形状按协议 M4c/N4c 归一化实测（2026-11-21）：kind/localPath/filename/mimeType——
+        // {type,path} 键名会被静默丢弃（她看到的 prompt 说"图已附上"实际零附件 → "图是空的"）
+        if (!abs.startsWith(join(P_DIR, 'attachments')) || !existsSync(abs)) return null;
+        return { kind: 'image', localPath: abs, filename: rel.split('/').pop(), mimeType: IMG_MIME[abs.split('.').pop().toLowerCase()] ?? 'image/jpeg' };
+      } catch { return null; }
+    };
     const attachments = [];
     for (const m of batch) {
       for (const mm of String(m.text ?? '').matchAll(/\[图片[:：]\s*(attachments\/[^\]\s]+?\.(?:png|jpe?g|gif|webp))\]/gi)) {
-        try {
-          const abs = join(P_DIR, mm[1]);
-          // 附件形状按协议 M4c/N4c 归一化实测（2026-11-21）：kind/localPath/filename/mimeType——
-          // {type,path} 键名会被静默丢弃（她看到的 prompt 说"图已附上"实际零附件 → "图是空的"）
-          if (abs.startsWith(join(P_DIR, 'attachments')) && existsSync(abs)) {
-            const ext = abs.split('.').pop().toLowerCase();
-            const mime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' }[ext] ?? 'image/jpeg';
-            attachments.push({ kind: 'image', localPath: abs, filename: mm[1].split('/').pop(), mimeType: mime });
-          }
-        } catch { /* 越界/不存在跳过 */ }
-        if (attachments.length >= 3) break; // 单批图片上限
+        const a = mkImgAttach(mm[1]);
+        if (a) attachments.push(a);
+        if (attachments.length >= 5) break; // 单批图片上限（2026-11-26：3→5，按需复核需要余量）
       }
-      if (attachments.length >= 3) break;
+      if (attachments.length >= 5) break;
+    }
+    // 按需复核（2026-11-26）：本批是图话题（消息文本含"图/photo/pic"）时，把池内近 5 分钟的旧图
+    // 重新附带——修复"图与话分批"与"首轮消费后无法复核"两类失明；话题离开自动不带（无消费标记，
+    // 讨论中每轮可见正是复核需求）。同 peer 隔离 + 与批内新图按文件名去重，合计守 5 上限
+    for (const fname of poolExtrasFor(batch, chatKey, new Set(attachments.map((a) => a.filename)))) {
+      if (attachments.length >= 5) break;
+      const a = mkImgAttach(`attachments/inbox/${fname}`);
+      if (a) attachments.push(a);
     }
     const last = batch[batch.length - 1];
     const mustMsg = batch.find((m) => m.must) ?? last;

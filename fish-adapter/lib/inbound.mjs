@@ -4,6 +4,7 @@ import { plainText, escapeAttr, log, collectImages, guessImageExt, extractAppCar
 import { writeInboxFile, bridgeDirs } from './bridge.mjs';
 import { detectNameTier, isNameMuted } from './name-tier.mjs';
 import { appendNote } from './sticky.mjs';
+import { recordImg } from './imgpool.mjs';
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -100,7 +101,7 @@ export function isBusy(chatKey, cfg) {
 const ATTACH_TTL_MS = 60 * 60 * 1000; // 附件保留 1 小时（12 个轮询轮内可回看，过期由 cleanAttachments 清）
 const IMG_MAX_BYTES = 10 * 1024 * 1024;
 
-async function attachImages(cfg, event, text) {
+async function attachImages(cfg, event, text, chatKey) {
   const urls = collectImages(event);
   if (!urls.length) return text;
   const base = bridgeDirs(cfg).base;
@@ -120,6 +121,8 @@ async function attachImages(cfg, event, text) {
       if (buf.length === 0 || buf.length > IMG_MAX_BYTES) throw new Error('bad size ' + buf.length);
       rel = `attachments/inbox/${Date.now()}-${event.message_id ?? 'noid'}-img${n}${guessImageExt(url)}`;
       writeFileSync(join(base, rel), buf);
+      // 复核池（2026-11-26 按需复核）：图话题的后续批次可重新附带这张图（TTL 5 分钟内）
+      recordImg(chatKey, rel);
     } catch (e) {
       log('inbound', `image download failed (msg=${event.message_id} #${n}): ${e.message}`);
     }
@@ -237,7 +240,7 @@ export function createInbound(cfg, onebot, patrol = null) {
 
     // at 段渲染修复：对自己的 at 渲染成名字（报文里 @<鱼号> 是陌生数字，鱼认不出是在叫自己）
     const renderAt = (t) => (cfg.botName ? t.split(`@${selfId}`).join(`@${cfg.botName}`) : t);
-    const text2 = renderAt(await attachCards(cfg, event, await attachImages(cfg, event, text)));
+    const text2 = renderAt(await attachCards(cfg, event, await attachImages(cfg, event, text, chatKey)));
     if (reply) reply.text = renderAt(reply.text);
 
     // ⑤ @ / 名字判断（S2.6 三档）：@、引用自己、名字边界命中 = 必回；名字在句中 = 软唤醒；
