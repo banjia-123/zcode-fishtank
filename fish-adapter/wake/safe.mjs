@@ -175,8 +175,10 @@ export function createWakeSafe(cfg, client) {
   // wakeSafe(chatKey, prompt, meta)：并发闸内跑一次唤醒
   // meta：{ batchId, msgs, hadTier2, onTier2Silent }（hadTier2 + silent → 退避结算，S2-E 传）
   function wakeSafe(chatKey, prompt, meta = {}) {
-    return new Promise((resolve, reject) => {
-      queue.push({ chatKey, prompt, meta, resolve, reject, enqueuedAt: Date.now() });
+    return new Promise((resolve) => {
+      // 失败/超时统一 resolve 出 { error, ... } 结果对象（runJob 全分支 job.resolve）——
+      // 历史上存过 reject 字段但从未被任何路径调用，删（死参数）
+      queue.push({ chatKey, prompt, meta, resolve, enqueuedAt: Date.now() });
       pump();
     });
   }

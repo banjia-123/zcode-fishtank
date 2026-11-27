@@ -4,7 +4,7 @@
 // 读失败 = 空状态（便签丢了 = 失忆不报错，S3.5 验收项）；写 = 临时文件 + rename 原子落盘
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
-import { ROOT_DIR } from './util.mjs';
+import { log, ROOT_DIR } from './util.mjs';
 
 const PEERS_DIR = join(ROOT_DIR, 'state', 'peers');
 
@@ -15,8 +15,10 @@ export function chatKeyToPeerKey(chatKey) {
 export function readPeer(chatKey) {
   try {
     return JSON.parse(readFileSync(join(PEERS_DIR, chatKeyToPeerKey(chatKey) + '.json'), 'utf8'));
-  } catch {
-    return {}; // 缺失/损坏 = 空状态，调用方各自给默认值
+  } catch (e) {
+    // 缺失（S3.5 验收项：新 peer 无状态）静默；损坏要留痕——便签/退避状态失忆无声是排查黑洞
+    if (e?.code !== 'ENOENT') log('peer', `WARN peer 状态文件损坏按空处理（便签/退避失忆）: ${chatKeyToPeerKey(chatKey)}: ${e.message}`);
+    return {};
   }
 }
 

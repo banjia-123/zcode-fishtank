@@ -48,7 +48,8 @@ export function plainText(event) {
 }
 
 // 收集 OneBot 消息里的图片段 url（只取 http/https；QQ 多媒体链接有效期短，须即时下载）
-// 与 plainText() 的 [图片] 占位符按段序一一对应（无 url 的 image 段两边都跳过）
+// 与 plainText() 的 [图片] 占位符按段序对应（plainText 对无 url 的 image 段也输出占位——
+// 占位数 ≥ url 数，下载侧按序对齐，多出的占位自然落到"下载失败"降级）
 export function collectImages(event) {
   const msg = event?.message;
   if (!Array.isArray(msg)) return [];

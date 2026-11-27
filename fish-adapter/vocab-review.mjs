@@ -80,13 +80,16 @@ if (args.includes('--list') || args.includes('--apply')) {
     console.error(`[参数] --apply 需要 --json '{"items":[{"id":"<词>","action":"approve|reject|retire"}]}'（或 --json-file 路径）。${e.message}`);
     exit(2);
   }
+  const lockErr = acquireLock();
+  if (lockErr) { console.error(`[锁] ${lockErr}`); exit(2); }
+  // C4：锁内读最新数据——原先锁前读，两个并发 --apply 都拿同一份旧数据先后持锁写盘，
+  // 先到者的裁决被后到者的旧数据整体覆盖（双方 results 还各自报 ok）
   let data;
   try { data = loadVocab(); } catch (e) {
+    releaseLock();
     logOp('review.vocab', false, { err: e.message, ms: Date.now() - T0 });
     outJson(1, { ok: false, error: `vocab.json 读取/校验失败：${e.message}` });
   }
-  const lockErr = acquireLock();
-  if (lockErr) { console.error(`[锁] ${lockErr}`); exit(2); }
   const results = [];
   const seen = new Set();
   let dirty = false;

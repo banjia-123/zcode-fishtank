@@ -8,8 +8,7 @@ import { existsSync, appendFileSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { loadConfig, log } from './lib/util.mjs';
 import { OneBotClient } from './lib/onebot.mjs';
-import { createInbound } from './lib/inbound.mjs';
-import { dedupHas } from './lib/inbound.mjs';
+import { createInbound, dedupHas } from './lib/inbound.mjs';
 import { createOutbound } from './lib/outbound.mjs';
 import { createPeers } from './lib/peer.mjs';
 import { poolExtrasFor, sortByNewest } from './lib/imgpool.mjs';
@@ -41,7 +40,7 @@ function selfCheckModel() {
     } : null;
     scmCache = { mtime: st.mtimeMs, val: m };
     return m;
-  } catch { return null; }
+  } catch (e) { log('selfcheck', `WARN selfCheckModel 读 config 失败，本轮自检按无覆盖模型（用巡逻默认模型）: ${e.message}`); return null; }
 }
 
 const cfg = loadConfig();

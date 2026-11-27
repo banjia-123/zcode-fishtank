@@ -18,7 +18,11 @@ function recordDrop(entry) {
   try {
     mkdirSync(LOG_DIR, { recursive: true });
     appendFileSync(join(LOG_DIR, 'dropped.jsonl'), JSON.stringify({ ts: Date.now(), ...entry }) + '\n', 'utf8');
-  } catch { /* 留痕失败不阻断主流程 */ }
+  } catch (e) {
+    // 这条 catch 是"丢消息排查"的最后防线，自己失败不能无声：双通道告警（log 可能同因失败，console 兜底）
+    console.error(`[bridge] recordDrop 自身失败（丢弃留痕丢失）: ${e.message}`);
+    try { log('bridge', `WARN recordDrop 自身失败（丢弃留痕丢失）: ${e.message}`); } catch { /* log 也不行了 */ }
+  }
 }
 
 export function bridgeDirs(cfg) {
@@ -41,7 +45,10 @@ export function ensureBridgeDirs(cfg) {
 function updateIndex(inbox, mutator, maxPending = 50) {
   const indexFile = join(inbox, '.index.json');
   let idx = { pending: [] };
-  try { idx = JSON.parse(readFileSync(indexFile, 'utf8')); } catch { /* 首次/损坏重建 */ }
+  try { idx = JSON.parse(readFileSync(indexFile, 'utf8')); } catch (e) {
+    // 首次 ENOENT 静默；损坏重建要留痕——索引清空 = 已在 inbox 的待处理文件失去索引，消息将滞留至 7 天 sweep
+    if (e?.code !== 'ENOENT') log('bridge', `WARN 信箱索引损坏，按空重建（已在 inbox 的待处理文件将滞留）: ${e.message}`);
+  }
   mutator(idx);
   // 兼容旧结构（字符串数组）并去重
   idx.pending = idx.pending

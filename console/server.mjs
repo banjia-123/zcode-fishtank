@@ -8,7 +8,7 @@
 // 数据源：fish-adapter/logs/wake.jsonl（尾读 256KB，绝不整文件读）+ 适配器 /stats /health 代理
 import { createServer, get as httpGet, request as httpRequest } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
-import { execFile, spawn as childSpawn } from 'node:child_process';
+import { execFile, execFileSync, spawn as childSpawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync, statSync, openSync, readSync, closeSync, writeFileSync, unlinkSync, renameSync, mkdirSync, readdirSync, appendFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -750,7 +750,13 @@ async function apiReviewDecision(body) {
       if (okIds.has(q.id)) { doneIdx.add(m.queueIdx); return { rid: m.rid, ok: true, effect: kind === 'memory' ? 'removed-from-core' : 'retired' }; }
       return { rid: m.rid, ok: false, error: allResults.find((x) => x.id === q.id && !x.ok)?.error ?? '脚本未处理该条' };
     });
-    if (doneIdx.size) writeRemoveQueue(queue.filter((_, i) => !doneIdx.has(i)));
+    if (doneIdx.size) {
+      // C3：写回不基于进入函数时的队列快照——await runReviewScript（最长 15s）期间并发的
+      // propose-remove 会把新提案写进文件，旧快照整体覆盖=新提案丢失/已决项复活。
+      // 改为重读当前队列，按已决 rid 定点删除（只删不覆盖，天然不吞并发新增）。
+      const doneRids = new Set(removeMeta.filter((m) => m.action && doneIdx.has(m.queueIdx)).map((m) => m.rid));
+      writeRemoveQueue(readRemoveQueue().filter((q) => !(q.kind === kind && doneRids.has(q.rid))));
+    }
     return {
       kind,
       results: allResults.filter((x) => !scriptRemoveIds.has(x.id)), // remove 项拆去 removeResults
@@ -916,9 +922,17 @@ function apiEmojiGate(body) {
   if (hasMax && (!Number.isInteger(Number(body.max)) || Number(body.max) < 1 || Number(body.max) > 30)) throw httpErr(400, 'E_BAD_PARAM', 'max 必须是 1~30 的整数');
   let st;
   try { st = configState(); } catch (e) { throw httpErr(500, 'E_IO', `config.json 读取失败：${e.message}`); }
-  const cfg = JSON.parse(st.raw);
-  cfg.emojiGate = { ...(cfg.emojiGate ?? {}), ...(hasEnabled ? { enabled: body.enabled } : {}), ...(hasWindow ? { window: Number(body.window) } : {}), ...(hasMax ? { max: Number(body.max) } : {}) };
-  const newRaw = JSON.stringify(cfg, null, 2) + '\n';
+  // C8：写回不基于进入函数时的快照——与配置页 apply 并发时整体覆盖会吞掉对方变更。
+  // 重读当前 config 只替换 emojiGate 键（合并写，互不覆盖）；备份仍基于进入时快照可回滚。
+  let cur;
+  try { cur = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch { cur = JSON.parse(st.raw); }
+  cur.emojiGate = {
+    ...(cur.emojiGate ?? {}),
+    ...(hasEnabled ? { enabled: body.enabled } : {}),
+    ...(hasWindow ? { window: Number(body.window) } : {}),
+    ...(hasMax ? { max: Number(body.max) } : {}),
+  };
+  const newRaw = JSON.stringify(cur, null, 2) + '\n';
   // 备份轮换（与两段式同款，10 份）
   let backupId = null;
   try {
@@ -933,7 +947,7 @@ function apiEmojiGate(body) {
   try { JSON.parse(readFileSync(tmp, 'utf8')); } catch (e) { unlinkSync(tmp); throw httpErr(500, 'E_IO', `回读校验失败：${e.message}`); }
   renameSync(tmp, CONFIG_PATH);
   logConsoleOp('emoji_gate', { enabled: body.enabled });
-  return { ...(cfg.emojiGate ?? {}), backupId, note: '即时生效（适配器现读 config，无需重启）' };
+  return { ...(cur.emojiGate ?? {}), backupId, note: '即时生效（适配器现读 config，无需重启）' };
 }
 
 // POST /api/emoji {name, dataBase64, desc, overwrite}：六道校验全过才写盘 + 同步补 index.json
@@ -1185,7 +1199,8 @@ function apiEmojiRestore(body) {
 // ══════════ G8d：自动化任务页（学习/信箱/日记/清理）══════════
 // ⚠ 五轮协议实测结论：stdio 模式的 app-server 不暴露 automation RPC 方法面（automation/list 等属
 //   桌面 UI 连接通道）→ 诚实降级：本页为**只读状态展示**，启停引导去 ZCode 桌面版 Automations 页面。
-// 任务库 sqlite 只读（readOnly:true，任务书允许）；绝不直写（调度状态由 ZCode 内部维护）。
+// 任务库 sqlite 只读（readOnly:true，任务书允许）；例外：apiTaskRemove 归档后直删任务行
+// （server.mjs 下方，DatabaseSync + 无 busy 超时——锁竞争时阻塞事件循环，已知债）。
 function apiAutomations() {
   const TASK_DB = process.env.USERPROFILE
     ? join(process.env.USERPROFILE, '.zcode', 'v2', 'tasks-index.sqlite')
@@ -1300,6 +1315,36 @@ function effectiveTaskModel(kind) {
 
 const taskRuns = new Map(); // kind -> { status, startedAt, finishedAt, sessionId, error }
 const taskEventLog = []; // 诊断：最近一次运行的事件形状（runTaskAsync 写入，status 端点暴露）
+const TASK_CHILD_PID = join(ADAPTER_DIR, 'state', 'task-child.json'); // 学习子进程 pid 记录（C2 幽灵任务收割用）
+
+// —— 孤儿任务收割（C2）：控制台重启会丢 taskRuns 内存态，而学习子进程（Windows 不随父退出）
+// 继续写 vocab/.learner-cursor——状态端点却显示"未运行过"，再点启动=双进程并发互踩文件。
+// 启动时按 pid 记录收割残留子进程（确认命令行含 app-server 才杀，防 pid 复用误伤）。
+function reapOrphanTask() {
+  let rec = null;
+  try { rec = JSON.parse(readFileSync(TASK_CHILD_PID, 'utf8')); } catch { return; }
+  const pid = Number(rec?.pid);
+  if (!pid) { try { unlinkSync(TASK_CHILD_PID); } catch {} return; }
+  try {
+    process.kill(pid, 0); // 探活：已死只清记录
+  } catch {
+    try { unlinkSync(TASK_CHILD_PID); } catch {}
+    return;
+  }
+  try {
+    const cmdline = execFileSync('powershell', ['-NoProfile', '-Command',
+      `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | ForEach-Object { [string]$_.CommandLine }`],
+      { timeout: 8000 }).toString();
+    if (/app-server/i.test(cmdline)) {
+      execFileSync('taskkill', ['/PID', String(pid), '/F'], { timeout: 8000 });
+      logConsoleOp('task-orphan-kill', { pid, kind: rec.kind ?? null, startedTs: rec.ts ?? null, note: '控制台重启期间的孤儿任务子进程' });
+      taskRuns.set(rec.kind ?? 'learn', { status: 'error', startedAt: rec.ts ?? Date.now(), finishedAt: Date.now(), error: '控制台重启，孤儿子进程已收割' });
+    }
+  } catch (e) {
+    logConsoleOp('task-orphan-kill', { pid, err: String(e.message ?? e) });
+  }
+  try { unlinkSync(TASK_CHILD_PID); } catch {}
+}
 
 function readTasksManual() {
   try { return JSON.parse(readFileSync(TASKS_MANUAL, 'utf8')); } catch { return { archivedAt: null, tasks: {} }; }
@@ -1387,6 +1432,8 @@ async function runTaskAsync(kind) {
   // 同款 ZCode 0.18.0 兼容：显式指定 builtin provider 配置路径（从 cliPath 推导）
   const builtinCfg = join(dirname(dirname(cliPath)), 'config', 'provider', 'zcode-builtin.json');
   const child = childSpawn(process.execPath, [cliPath, 'app-server'], { cwd: FISHPOND, env: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinCfg }, stdio: ['pipe', 'pipe', 'pipe'] });
+  // C2：pid 落盘——控制台若在任务运行中重启，重启后的 reapOrphanTask() 靠它收割这个子进程
+  try { writeFileSync(TASK_CHILD_PID, JSON.stringify({ pid: child.pid, kind, ts: st.startedAt })); } catch { /* 记录失败不阻断任务 */ }
   let seq = 0; let buf = '';
   const pending = new Map();
   const handlers = new Set();
@@ -1426,6 +1473,7 @@ async function runTaskAsync(kind) {
   const finish = (status, error = null, extra = {}) => {
     if (settled) return;
     settled = true;
+    try { unlinkSync(TASK_CHILD_PID); } catch { /* 无记录或已清 */ }
     taskRuns.set(kind, { status, startedAt: st.startedAt, finishedAt: Date.now(), outTail: outTail.slice(-500), error, ...extra });
     // 任务 token 流水（只有 done 有 usage——失败/超时无产出不计费）：
     if (status === 'done' && extra.usage) {
@@ -1803,13 +1851,14 @@ server.on('error', (e) => {
   process.exit(1);
 });
 
-// 进程级兜底：控制台是纯读服务无状态，单个请求炸了打日志撑住，绝不连累别的请求（更不连累鱼）
+// 进程级兜底：控制台有内存态（taskRuns/applyTokens）但请求无交叉依赖，单个请求炸了打日志撑住，绝不连累别的请求（更不连累鱼）
 process.on('uncaughtException', (e) => console.error('[console] uncaught:', e.stack ?? e));
 process.on('unhandledRejection', (e) => console.error('[console] unhandled:', e));
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`[console] listening on http://127.0.0.1:${PORT} (G4；数据源: wake.jsonl + 适配器 /stats)`);
 });
+reapOrphanTask(); // listen 后即收割上次运行残留的孤儿任务子进程（C2）
 
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, () => {

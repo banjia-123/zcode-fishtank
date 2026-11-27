@@ -83,16 +83,18 @@ if (args.includes('--list') || args.includes('--apply')) {
     console.error(`[参数] --apply 需要 --json '{"items":[{"id":"<行号>","action":"approve|reject"}]}'（或 --json-file 路径）。${e.message}`);
     exit(2);
   }
+  const lockErr = acquireLock();
+  if (lockErr) { console.error(`[锁] ${lockErr}`); exit(2); }
+  // C4：锁内读最新数据——原先锁前读，并发 --apply 后写者用旧数据覆盖先写者的裁决
   let candL, coreL;
   try {
     candL = readFileSync(CAND, 'utf8').split(/\r?\n/);
     coreL = readFileSync(CORE, 'utf8').split(/\r?\n/);
   } catch (e) {
+    releaseLock();
     logOp('review.memory', false, { err: e.message, ms: Date.now() - T0 });
     outJson(1, { ok: false, error: `文件读取失败：${e.message}` });
   }
-  const lockErr = acquireLock();
-  if (lockErr) { console.error(`[锁] ${lockErr}`); exit(2); }
   const addCoreTo = (lines, line) => {
     const lastIdx = lines.map(isEntry).lastIndexOf(true);
     if (lastIdx >= 0) lines.splice(lastIdx + 1, 0, line);

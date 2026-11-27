@@ -33,7 +33,7 @@ export class OneBotClient {
     });
     ws.addEventListener('message', (ev) => {
       let data;
-      try { data = JSON.parse(String(ev.data)); } catch { return; }
+      try { data = JSON.parse(String(ev.data)); } catch { import('./util.mjs').then(({ log }) => log('onebot', 'WARN 收到非 JSON WS 帧，已忽略')); return; }
       // 只转发消息事件；心跳/元事件直接忽略
       if (data && data.post_type === 'message' && this.onEvent) {
         Promise.resolve(this.onEvent(data)).catch((e) => {

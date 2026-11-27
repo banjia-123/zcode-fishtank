@@ -1,5 +1,6 @@
 // 本地路径占位：<工作区> = 部署根目录（本仓库不留真实路径，本地跑前全局替换回来）
-// probe6：验证 session/send 的 attachments 图片输入——两种形状各测一次，问"图里有什么"
+// probe6：验证 session/send 的 attachments 图片输入（已收敛为只测 kind/localPath 实测形状，
+// {type,path} 旧形状已被证伪丢弃，无需再测），问"图里有什么"
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 

@@ -1,4 +1,4 @@
-// 运行日志轮转（S4 收尾补）：append-only 日志超阈值滚成 <名>.1（只留一份旧档）。
+// 运行日志轮转（S4 收尾补）：append-only 日志超阈值滚成 <名>.1，旧 .1 顺移 .2（共留两份旧档）。
 // 原则：轮转的只有"运行日志"；归档类（sessions.jsonl / dropped.jsonl / diary-deleted.jsonl）是留痕本体不轮；
 // fishpond/logs/chat.jsonl 绝不动——学习任务的 .learner-cursor 是绝对行号，轮转会错位游标。
 // Windows 注意：文件被并发持有时 rename 会失败——try-catch 跳过，下一轮再试（append 每次开闭，几乎不会锁）。

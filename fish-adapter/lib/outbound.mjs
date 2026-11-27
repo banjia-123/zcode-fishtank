@@ -70,7 +70,7 @@ function emojiGateState() {
       max: Math.max(1, Number(g.max) || 2),
     } };
     return gateCache.state;
-  } catch { return { ...EMOJI_GATE_DEFAULT }; }
+  } catch (e) { log('outbound', `WARN emojiGate 读 config 失败，回退默认 ${JSON.stringify(EMOJI_GATE_DEFAULT)}: ${e.message}`); return { ...EMOJI_GATE_DEFAULT }; }
 }
 // —— 拟真打字节奏（2026-11-25，借鉴 dsh-sansan-qq 的 typingDelayMs）——
 // 段间延迟按上一行字数 × 打字速度算：长句等得久、短句快，外加构思抖动与 12% 概率手快。
@@ -86,7 +86,7 @@ function typingSecPerChar() {
     const n = Number(JSON.parse(readFileSync(TYPING_FILE, 'utf8')).limits?.typingSecPerChar);
     typingCache = { mtime: st.mtimeMs, secPerChar: n > 0 ? n : (n === 0 ? 0 : 0.15) };
     return typingCache.secPerChar;
-  } catch { return 0.15; }
+  } catch (e) { log('outbound', `WARN typingSecPerChar 读 config 失败，回退 0.15: ${e.message}`); return 0.15; }
 }
 // 纯函数可单测：secPerChar 无效（≤0/NaN）走旧分支 1500~4000ms
 export function typingDelayMs(prevText, secPerChar) {
@@ -389,8 +389,7 @@ export function createOutbound(cfg, onebot, inboundState) {
     // 老格式维持原逻辑（maxSegments 分段 + maxTotalChars 总字数闸门，宁说一半不刷屏）
     let segments;
     if (isNew) {
-      segments = textLines;
-      if (!segments.length && emojiPath) segments = [];
+      segments = textLines; // 纯表情轮走下方 !segments.length && emojiSeg 分支，无需在此重置
     } else {
       const maxSegs = isBusy(chatKey, cfg)
         ? (cfg.limits?.busyMaxSegments ?? 2)
@@ -446,6 +445,25 @@ export function createOutbound(cfg, onebot, inboundState) {
       };
     }
 
+    // ⑤.5 限额预占（C1）：计数点从"发送成功后"提前到"检查通过后（dry-run 已 return 不占）"。
+    // 本点与限额检查之间无 await（同一同步段，JS 单线程天然原子）——原先检查与计数隔着
+    // 1.5~8s 拟真打字延迟 + 网络往返，两个并发 processMessage 都能通过检查再各自发送（TOCTOU 超发）。
+    // 预占后发送失败也占额度：宁少发不多发（fail-closed，与计数器损坏按上限同哲学）。
+    dailyCount += 1;
+    saveCounters();
+    if (chatType === 'group') { rl.push(Date.now()); rollWindow.set(chatKey, rl); }
+    if (replyKey != null) {
+      const ck = perChat.get(countKey) ?? { repliesToLastInbound: 0, proactive: [] };
+      ck.repliesToLastInbound += 1;
+      perChat.set(countKey, ck);
+    } else if (isReply) {
+      st.repliesToLastInbound += 1;
+      perChat.set(chatKey, st);
+    } else {
+      st.proactive.push(Date.now());
+      perChat.set(chatKey, st);
+    }
+
     try {
       // 纯表情（无文字）：只发一条 image 消息；否则文字段逐条发，首段挂引用、末段拼表情（图文同条）
       let r = null;
@@ -479,24 +497,11 @@ export function createOutbound(cfg, onebot, inboundState) {
       }
       // D4b · 部分成功即成功：发出去至少一段就不重试（宁可少发一段，不为补一句把整段刷两遍）。
       // 一段都没发出去才算 error——此时重试是安全的（没有重复）。
+      // 限额计数已在 ⑤.5 预占（C1），此处不再动计数器。
       if (sent > 0) {
-        dailyCount += 1;
-        if (chatType === 'group') { rl.push(Date.now()); rollWindow.set(chatKey, rl); }
-        saveCounters();
         const partial = sent < (segments.length || 1) ? `${sent}/${segments.length || 1}` : null;
         if (partial) log('outbound', `WARN outbound partial ${partial} chat=${chatKey} err=${JSON.stringify(lastErr).slice(0, 120)} [${source}]`);
         recordSpeak(cfg, chatKey, text, source, emojiPath);
-        if (replyKey != null) {
-          const ck = perChat.get(countKey) ?? { repliesToLastInbound: 0, proactive: [] };
-          ck.repliesToLastInbound += 1;
-          perChat.set(countKey, ck);
-        } else if (isReply) {
-          st.repliesToLastInbound += 1;
-          perChat.set(chatKey, st);
-        } else {
-          st.proactive.push(Date.now());
-          perChat.set(chatKey, st);
-        }
         log('outbound', `sent → ${chatKey} (${isReply ? 'reply' : 'proactive'} daily=${dailyCount} lines=${sent}${partial ? ` partial=${partial}` : ''}${truncated ? ` truncated=${truncated}` : ''}${emojiPath ? ' +emoji' : ''}) [${source}]`);
         return { action: 'sent', truncated, inboxFile };
       }

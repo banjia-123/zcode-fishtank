@@ -175,8 +175,10 @@ export function createAppServerClient(cfg) {
 
   // 单次唤醒：新会话一次性往返（S2.14 只做 new-session；群聊复用长会话会串台）
   // 返回 { content, stopReason, usage }；[SILENT] 判定归上层 safe（wake 只管协议）
-  // attachments（2026-11-21）：{type:'image', path:'绝对路径'} 数组——协议原生附件（宿主自己读文件），
-  // 群图随行让她真能"看到"图（此前 [图片: xxx] 对她只是字面文本，零工具形态又读不了盘）
+  // attachments（2026-11-21）：{kind:'image', localPath:'绝对路径', filename, mimeType} 数组——协议原生附件
+  // （宿主自己读文件），群图随行让她真能"看到"图（此前 [图片: xxx] 对她只是字面文本，零工具形态又读不了盘）。
+  // 键名必须是 kind/localPath：{type, path} 形状会被协议静默丢弃（2026-11-21 实测，"图是空的"事故根因，
+  // 归一化逻辑见 adapter.mjs 的 mkImgAttach）
   // inFlight 包装层：活跃唤醒计数（见 return 处 inFlight 暴露说明）
   let unknownKindLogged = false; // 帧形状探测去重（进程级一次即可）
   async function wakeOnce(prompt, opts = {}) {

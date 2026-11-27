@@ -6,6 +6,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderNotes } from '../lib/sticky.mjs';
 import { fillPlaceholders } from '../lib/placeholder.mjs';
+import { log } from '../lib/util.mjs';
 
 const SEG_RE = /<(?:group|private)_message[\s\S]*?<\/(?:group|private)_message>/g;
 
@@ -25,7 +26,7 @@ function emojiDigest(personaDir) {
     const lines = Object.entries(idx).slice(0, 30).map(([k, v]) => `  ${k}｜${String(typeof v === 'string' ? v : v?.desc ?? '').slice(0, 46)}`);
     emojiCache = { mtime: st.mtimeMs, text: lines.join('\n') };
     return emojiCache.text;
-  } catch { return ''; }
+  } catch (e) { log('wake', `WARN 表情索引读取失败，本轮 prompt 不带表情段（"600 条 0 表情"修复成果会无声退化）: ${e.message}`); return ''; }
 }
 
 export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
@@ -39,7 +40,7 @@ export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
       '<鱼名>': cfg.botName,
       '<群号>': (cfg.allow?.groups ?? [])[0],
     });
-  } catch { /* persona 缺失也唤醒——人格靠记忆里的默认语气兜底，别因文件问题装死 */ }
+  } catch (e) { log('wake', `WARN persona.md 读取失败，人格降级为模型默认语气（检查路径）: ${e.message}`); }
 
   const segs = [];
   for (const m of batch) {

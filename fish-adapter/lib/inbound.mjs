@@ -34,10 +34,13 @@ try {
     try { const o = JSON.parse(line); if (Date.now() - o.ts < DEDUP_TTL) seen.set(o.id, o.ts); } catch { /* 跳过坏行 */ }
   }
   if (seen.size) log('inbound', `dedup restored: ${seen.size} 条（重启防重发）`);
-} catch { /* 首次运行无此文件 */ }
+} catch (e) {
+  // 首跑 ENOENT 静默；真损坏要留痕——去重表空意味着 WS 重放全当新消息，事后必须可查
+  if (e?.code !== 'ENOENT') log('inbound', `WARN seen.jsonl 读取失败（去重表按空处理，重放风险）: ${e.message}`);
+}
 try { mkdirSync(join(ROOT_DIR, 'state'), { recursive: true }); } catch { /* 已存在 */ }
 function persistSeen(id) {
-  try { appendFileSync(SEEN_FILE, JSON.stringify({ id, ts: Date.now() }) + '\n', 'utf8'); } catch { /* 落盘失败不阻断 */ }
+  try { appendFileSync(SEEN_FILE, JSON.stringify({ id, ts: Date.now() }) + '\n', 'utf8'); } catch (e) { log('inbound', `WARN seen 落盘失败（重启后此消息可能重复回复）: ${e.message}`); }
 }
 function compactSeen() {
   try {
@@ -47,7 +50,7 @@ function compactSeen() {
     const tmp = SEEN_FILE + '.tmp';
     writeFileSync(tmp, keep.join('\n') + (keep.length ? '\n' : ''), 'utf8');
     renameSync(tmp, SEEN_FILE);
-  } catch { /* 压实失败下次再试 */ }
+  } catch (e) { log('inbound', `WARN seen 压实失败（下次再试）: ${e.message}`); }
 }
 setInterval(compactSeen, 10 * 60 * 1000).unref?.();
 
@@ -76,7 +79,8 @@ function allowed(cfg, event) {
   return list.map(String).includes(id);
 }
 
-// —— 管理命令：由桥接硬执行，不经过模型（验收 #15/#16）——
+// —— 管理命令：拦截权在适配器（非 owner 直接丢弃），owner 的命令则放行走正常投递链路
+// 交模型处理（见下方 226 行分支注释；"桥接硬执行"是信箱时代的旧行为，已随信箱退役）——
 const ADMIN_COMMANDS = ['/reset'];
 
 // P1 场合闸门（v3 §6.2）：热闹降级 + 非必回节流
@@ -131,7 +135,7 @@ async function attachImages(cfg, event, text, chatKey) {
   return out;
 }
 
-// 清理过期附件（启动时一次 + 每 10 分钟定时；单文件失败继续，整体失败静默）
+// 清理过期附件（启动时一次 + 每 10 分钟定时；单文件失败继续，整体失败留痕）
 function cleanAttachments(cfg) {
   try {
     const dir = join(bridgeDirs(cfg).base, 'attachments', 'inbox');
@@ -140,7 +144,10 @@ function cleanAttachments(cfg) {
       const full = join(dir, f);
       try { if (now - statSync(full).mtimeMs > ATTACH_TTL_MS) unlinkSync(full); } catch { /* 继续 */ }
     }
-  } catch { /* 目录不存在等，忽略 */ }
+  } catch (e) {
+    // 目录不存在（首跑）静默；其他失败=TTL 清理停摆，inbox 附件目录会无限堆积，必须有人知道
+    if (e?.code !== 'ENOENT') log('inbound', `WARN 附件 TTL 清理失败（inbox 附件将持续堆积）: ${e.message}`);
+  }
 }
 
 // —— 分享卡片（鱼看卡片 v1）：json 卡片 → [视频卡片: 标题 | 简介 | 链接 | 封面] 占位注入 ——

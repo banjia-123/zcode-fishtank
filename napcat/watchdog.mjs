@@ -25,7 +25,7 @@ if (!TOKEN || !QQ) {
   console.error(`[watchdog] 无法从 ${CONFIG} 读取 onebot.accessToken / onebot.selfId，退出`);
   process.exit(1);
 }
-const NODE = 'C:/Program Files/nodejs/node.exe';
+const NODE = process.execPath; // 不硬编码 node 路径（换机/node 装他处时全家拉不起）
 const BAT = join(HERE, 'unpacked', 'napcat.bat');
 const LOG = join(HERE, 'watchdog.log');
 
@@ -78,6 +78,26 @@ function killNapCat() {
 let failStreak = 0;      // 连续失败轮数
 let restarting = false;
 
+// —— 单实例锁（C6）：重复双击"鱼上线"会并存多个 watchdog，各自 60s 周期清场重拉
+// NapCat 互相打架。枚举 node 进程里命令行含 watchdog.mjs 的其他实例，有则让位退出。
+// （枚举命令自身的命令行是 powershell.exe，不含 node.exe 过滤，不会自匹配）
+try {
+  const out = execSync(
+    "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='node.exe'\\\" | Where-Object { ([string]$_.CommandLine) -match ('watch' + 'dog.mjs') -and $_.ProcessId -ne " + process.pid + " } | ForEach-Object { $_.ProcessId }\"",
+    { timeout: 10_000, shell: 'cmd.exe' }
+  ).toString().trim();
+  if (out) {
+    console.error(`[watchdog] 已有实例在跑（PID ${out.split(/\s+/).join(',')}），本实例退出`);
+    process.exit(0);
+  }
+} catch { /* 枚举失败放行——锁是尽力而为，别因锁挡住唯一守护 */ }
+
+// —— 登录宽限窗（C7）：NapCat 快速登录 60~90s、慢登录（风控/换号）更长；原先 boot 后
+// 最短 ~68s 即判死，会把刚拉起还没登录完的 NapCat 反复杀掉（自愈型竞态撞"控频防风控"红线）。
+// boot 后 3 分钟内只观察不判死——已登录场景第一轮 alive 即通过，宽限无副作用。
+const BOOT_AT = Date.now();
+const LOGIN_GRACE_MS = 180_000;
+
 // —— 适配器守护（2026-11-21 补缺口）：适配器单进程崩 = 鱼静默下线无人拉——
 // 探 TCP 3200（1.5s 超时），NapCat 在线 && 适配器死（双轮确认）→ 直接拉起 node adapter.mjs。
 // 与鱼下线无冲突：下线脚本连 watchdog 一起关，不会出现"下线后被复活"。
@@ -128,6 +148,11 @@ async function check() {
   failStreak += 1;
   log(`离线（连续第 ${failStreak} 轮）`);
   if (failStreak < 2) return; // 单轮失败再观察一轮，防抖
+  // 登录宽限：boot 后初期只观察不杀拉（见 LOGIN_GRACE_MS 注释）
+  if (Date.now() - BOOT_AT < LOGIN_GRACE_MS) {
+    log('登录宽限窗内，继续观察不判死');
+    return;
+  }
 
   restarting = true;
   log('确认死亡，清场并拉起…');
