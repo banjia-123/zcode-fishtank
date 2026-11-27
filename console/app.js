@@ -1120,8 +1120,9 @@ async function doChatTest() {
   }
 }
 
-// 事件委托（send 页模式：loadChatTest 不重建外层 DOM，委托不受影响）
-$('#chattest-card').addEventListener('click', (e) => {
+// 事件委托绑在 page section 上（清空按钮在 page-head 的 .page-actions 里，不在 #chattest-card
+// 内——绑 card 会让清空按钮的点击根本到不了处理函数，2026-11-27 用户实测踩到）
+$('#page-chattest').addEventListener('click', (e) => {
   if (e.target.id === 'chattest-go') doChatTest().catch((err) => toast(err.message));
   if (e.target.id === 'chattest-clear') {
     if (ctState.history.length && confirm('清空试聊历史？（不影响任何正式数据）')) {
