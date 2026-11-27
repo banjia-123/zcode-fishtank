@@ -131,10 +131,12 @@ function maskChat(chatKey) {
 }
 
 // ── 今日口径：wake.jsonl 的 ts 是 ISO 字符串，按本地日过滤（控制台给人看，用本地日）──
+// 2026-11-27 统一补零：日记文件名约定补零（2027-01-05.md），此前这里不补零生成 2027-1-5.md
+// 永不命中 → "今日已写"短路在单数字月日失效（明年 1 月起重复触发）。全文件唯一日期口径。
 function localDay(ts) {
   const d = ts instanceof Date ? ts : new Date(ts);
   if (Number.isNaN(d.getTime())) return null;
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function readAdapterCfgSafe() {
@@ -223,7 +225,7 @@ async function apiOverview() {
 function normDate(s) {
   const m = String(s ?? '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (!m) return localDay(new Date());
-  return `${m[1]}-${Number(m[2])}-${Number(m[3])}`; // 与 localDay 同款不补零格式
+  return `${m[1]}-${String(Number(m[2])).padStart(2, '0')}-${String(Number(m[3])).padStart(2, '0')}`; // 与 localDay 同款补零格式（两套策略并存曾让单数字月日比较失配）
 }
 function maskWakeRow(r) {
   return {
@@ -813,8 +815,8 @@ function parseCoreMd() {
       if (a.length >= 10 && b.length >= 10 && (a.includes(b) || b.includes(a))) { dup.add(entries[i].id); dup.add(entries[j].id); }
     }
   }
-  const pending = readRemoveQueue().length; // 待审删除提案数（G5b）
-  return { state: 'ready', entries, dupIds: [...dup], maxLines: 60, usedLines: lines.length, pendingProposals: pending.length };
+  const pending = readRemoveQueue().length; // 待审删除提案数（G5b）——length 本身就是数字，再取 .length 是 undefined
+  return { state: 'ready', entries, dupIds: [...dup], maxLines: 60, usedLines: lines.length, pendingProposals: pending };
 }
 
 // GET /api/memory：已生效记忆（解析 core.md，带来源/日期/重复标记）
@@ -1559,8 +1561,7 @@ function apiTaskStatus() {
   // 日期一律本地时区（diary 文件名与群友体感都是本地日）；今天还没写不掐断连击（从昨天起算）
   let diaryBacklog = null;
   try {
-    const localDay = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-    const today = localDay(new Date());
+    const today = localDay(new Date()); // 顶层 localDay 已统一补零（原此处遮蔽副本即两套口径的根源之一）
     const files = readdirSync(join(FISHPOND, 'diary')).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f));
     const daySet = new Set(files.map((f) => f.slice(0, 10)));
     const tf = files.find((f) => f === `${today}.md`);

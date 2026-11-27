@@ -51,6 +51,12 @@ export const DENY_ALL = [
   'mcp__tools__workflow_init',
   'mcp__tools__workflow_execute',
   // Task / report_image_content：2026-11-20 工具面自检第二抓（Agent 的自述别名 + MCP 上报族新增）
+  // 2026-11-27 第四抓（boot 首轮自检，两轮重复报 BashOutput/KillShell 确认为真实漏禁——Bash 的
+  // 配套工具此前只禁了 Bash 本体；其余为模型自述疑似幻觉名，按"多列无害"惯例一并点名）：
+  'BashOutput', 'KillShell', 'SlashCommand', 'update_plan',
+  'Compat007f1', 'CompatHeadbookSessionFFFF', 'CompatParticleMiEraseFont',
+  'VoteMaximap', 'mcp__tools__report_can_use_skIll',
+  'mcp__tools__report_can_use_skIll_result', 'mcp__tools__report_plan_status',
 ];
 
 export function createAppServerClient(cfg) {
@@ -62,6 +68,7 @@ export function createAppServerClient(cfg) {
   let reqSeq = 0;
   let restartDelay = 1000;
   let stopped = false;
+  let restartTimer = null; // 排队的重启定时器句柄：ensure 立即重启时要取消它，防双 spawn 孤儿
   const pending = new Map(); // 请求 id -> {resolve, reject}
   const eventHandlers = new Set(); // 通知订阅者
   let starting = null; // 启动 Promise（防并发 spawn）
@@ -94,17 +101,21 @@ export function createAppServerClient(cfg) {
   }
 
   function spawnServer() {
+    // 排队的重启定时器与立即 spawn 互斥：退避窗口内 ensure() 抢先重启时必须取消
+    // 定时器——否则定时器到点再 spawn 一个，前一个进程无 kill 成永久孤儿（双 spawn 竞态）
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     // ZCode 0.18.0 起 builtin provider 配置的查找路径变化（找 <resources>/glm/provider/ 而实际在
     // <resources>/config/provider/）→ 无头 app-server 启动即崩（code=1 循环）。用官方环境变量显式
     // 指定配置文件路径（从 CLI 路径推导：<resources>/config/provider/zcode-builtin.json）
     const builtinCfg = join(dirname(dirname(CLI)), 'config', 'provider', 'zcode-builtin.json');
-    child = spawn(process.execPath, [CLI, 'app-server'], {
+    const me = spawn(process.execPath, [CLI, 'app-server'], {
       cwd: WORKSPACE,
       env: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinCfg },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    child = me;
     let buf = '';
-    child.stdout.on('data', (d) => {
+    me.stdout.on('data', (d) => {
       buf += d.toString('utf8');
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {
@@ -113,17 +124,25 @@ export function createAppServerClient(cfg) {
         if (line) { try { handleFrame(JSON.parse(line)); } catch { /* 坏行跳过 */ } }
       }
     });
-    child.stderr.on('data', (d) => log('wake', `app-server stderr: ${String(d).trim().slice(0, 200)}`));
-    child.on('exit', (code) => {
-      child = null;
-      const err = new Error(`app-server exited (code=${code})`);
+    me.stderr.on('data', (d) => log('wake', `app-server stderr: ${String(d).trim().slice(0, 200)}`));
+    // exit 与 error 共用一段下线逻辑（down 幂等防双触发：spawn 失败时 error 之后还可能来 exit）
+    let down = false;
+    const onDown = (code, spawnErr) => {
+      if (down) return;
+      down = true;
+      if (child === me) child = null;
+      const err = spawnErr ?? new Error(`app-server exited (code=${code})`);
       for (const [, p] of pending) p.reject(err);
       pending.clear();
       if (stopped) return; // 主动 stop 不重启
-      log('wake', `WARN app-server 进程退出 code=${code}，${restartDelay}ms 后重启`);
-      setTimeout(spawnServer, restartDelay);
+      log('wake', `WARN app-server down（${spawnErr ? `spawn error: ${spawnErr.message}` : `code=${code}`}），${restartDelay}ms 后重启`);
+      restartTimer = setTimeout(spawnServer, restartDelay);
       restartDelay = Math.min(restartDelay * 2, 60_000); // 成功跑稳后由 ensure() 重置
-    });
+    };
+    // spawn 失败（cliPath 无效等 ENOENT）走异步 error 事件——不挂监听就是 uncaughtException，
+    // 整个适配器被拉死，与文件头"子进程崩溃自动重启"的容错声明直接矛盾
+    me.on('error', (e) => onDown(null, e));
+    me.on('exit', (code) => onDown(code));
   }
 
   function send(frame) {
@@ -233,6 +252,7 @@ export function createAppServerClient(cfg) {
 
   function stop() {
     stopped = true;
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; } // 排队中的重启也别再拉起
     try { child?.kill(); } catch { /* 已退 */ }
   }
 

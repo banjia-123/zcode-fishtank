@@ -129,5 +129,10 @@ export function loadConfig() {
   if (cfg.allow?.allowAllWhenEmpty !== false) {
     throw new Error('allow.allowAllWhenEmpty 必须为 false（fail-closed），拒绝启动');
   }
+  // 白名单形状 fail-fast：groups/private 非数组时启动即拦（缺键曾让健康检查定时器
+  // 裸访问 `cfg.allow.groups` 抛 TypeError → unhandledRejection → 进程静默退出）
+  if (!Array.isArray(cfg.allow?.groups) || !Array.isArray(cfg.allow?.private)) {
+    throw new Error('allow.groups / allow.private 必须为数组（白名单形状 fail-fast），拒绝启动');
+  }
   return cfg;
 }

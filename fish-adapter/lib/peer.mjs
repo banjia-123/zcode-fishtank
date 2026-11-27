@@ -37,12 +37,11 @@ export function createPeers(cfg, flushHandler) {
     const batch = p.msgs.splice(0);
     peers.delete(chatKey); // 整批取走、按群释放
     log('peer', `flush ${chatKey} msgs=${batch.length} reason=${reason}（must=${batch.some((m) => m.must) ? 'y' : 'n'}）`);
-    try {
-      flushHandler(chatKey, batch, { reason, batchId: `${chatKey}-${Date.now()}` });
-    } catch (e) {
-      // handler 崩溃不反噬缓冲层（S2-E 起 handler 内部另有超时/熔断）
-      log('peer', `WARN flushHandler error (${chatKey}): ${e.message}`);
-    }
+    // handler 崩溃不反噬缓冲层（S2-E 起 handler 内部另有超时/熔断）。
+    // async IIFE 包装：裸 try/catch 只接得住同步 throw——handler 是 async，rejection 会变
+    // 悬空 promise（unhandledRejection = 进程崩），timer 路径无人 catch 时缓冲消息全部白丢
+    (async () => flushHandler(chatKey, batch, { reason, batchId: `${chatKey}-${Date.now()}` }))()
+      .catch((e) => log('peer', `WARN flushHandler error/rejected (${chatKey}): ${e.message}`));
   }
 
   function arm(chatKey, ms) {

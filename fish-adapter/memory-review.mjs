@@ -264,7 +264,14 @@ try {
     }
   }
 } catch (e) {
-  console.log(`\n（输入中断：${e.message}——已审 ${moved + dropped} 条均已落盘，未丢）`);
+  if (e === eofErr) {
+    console.log(`\n（输入中断：${e.message}——已审 ${moved + dropped} 条均已落盘，未丢）`);
+  } else {
+    // 落盘失败（磁盘满/权限）冒泡到这里的，原先被误报成"输入中断且均已落盘"——
+    // 撒谎的收尾统计比崩溃更糟：如实报错退出，已标记"已落盘"的最后一条可能未写入
+    console.error(`\n[落盘失败] ${e.message}——上面标记"已落盘"的最后一条可能未写入，请重跑核对`);
+    exit(1);
+  }
 } finally {
   rl.close();
 }

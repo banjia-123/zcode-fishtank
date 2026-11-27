@@ -36,11 +36,15 @@ const die = (stage, error) => {
 };
 
 // ① 杀旧（失败即停：杀不死旧的就拉新，会双实例抢 3200 端口）
+// 先枚举旧适配器 pid 再连同其 node 子进程一起杀：适配器的常驻 app-server 是 spawn 出来的
+// 独立进程（Windows 不随父退出），只杀父 = 每次重启泄漏一个持会话的孤儿进程；
+// 子进程按 ParentProcessId 匹配，控制台的学习任务子进程（父=控制台进程）不受影响
 const psScript = [
-  "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\"",
-  "Where-Object { ([string]$_.CommandLine) -match 'adapter\\.mjs' -and ([string]$_.CommandLine) -notmatch 'restart' }",
-  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host ('stopped old adapter PID ' + $_.ProcessId) }",
-].join(' | ');
+  "$adapters = Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { ([string]$_.CommandLine) -match 'adapter\\.mjs' -and ([string]$_.CommandLine) -notmatch 'restart' }",
+  "$ids = @($adapters | ForEach-Object { $_.ProcessId })",
+  "$adapters | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host ('stopped old adapter PID ' + $_.ProcessId) }",
+  "if ($ids.Count -gt 0) { Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $ids -contains $_.ParentProcessId } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; Write-Host ('stopped adapter child PID ' + $_.ProcessId) } }",
+].join('; ');
 try {
   const out = execFileSync('powershell', ['-NoProfile', '-Command', psScript], { encoding: 'utf8' }).trim();
   if (!JSON_MODE) console.log(out || '(没有在跑的旧适配器)');
@@ -51,14 +55,17 @@ try {
 await new Promise((r) => setTimeout(r, 1000));
 
 // ② 拉新（detached + ignore + unref：父进程退出不连带杀掉适配器）
+// process.execPath 而非硬编码 node 路径（换机/node 装非默认位置时硬编码必失败）；
+// spawn 失败走异步 error 事件——裸 try/catch 只接同步抛，不挂监听会变 uncaughtException
 let child;
 try {
-  child = spawn('C:\\Program Files\\nodejs\\node.exe', ['adapter.mjs'], {
+  child = spawn(process.execPath, ['adapter.mjs'], {
     cwd: HERE,
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
   });
+  child.on('error', (e) => die('spawn', e.message)); // die 落 ops 流水后再退，别裸抛
   child.unref();
 } catch (e) {
   die('spawn', e.message);

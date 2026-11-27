@@ -122,7 +122,13 @@ function recentEmojiCount(cfg, chatKey, window) {
       .filter((r) => r && r.chat === chatKey)
       .slice(-window);
     return rows.filter((r) => r.emoji).length;
-  } catch { return 0; }
+  } catch (e) {
+    if (e?.code === 'ENOENT') return 0; // 没有发言记录 = 近期 0 次表情（正常首跑）
+    // 真读失败（损坏/权限/磁盘）：fail-closed——按"已达上限"拦截。
+    // 原先 return 0 是 fail-open：speak.jsonl 读不了时硬闸无声失效，表情照发（G9b 的后门）
+    log('outbound', `WARN emoji gate 读 speak.jsonl 失败，本次按已达上限拦截: ${e.message}`);
+    return Infinity;
+  }
 }
 
 // 发言记录（v3 §8.2 feedback 迭代基础）：鱼每次成功发言追加一行，供"像人/像AI"标注

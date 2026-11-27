@@ -23,7 +23,9 @@ function fireLog(obj) {
 
 function allow() { process.exit(0); }
 function deny(reason) {
-  fireLog({ phase: 'deny', reason, sessionId: String(ev.session_id ?? ev.sessionId ?? '') });
+  // ev 可能未定义（stdin 解析失败路径先于赋值就调 deny）——可选链防 deny 自身崩溃：
+  // 崩了虽大概率仍非零退出，但 permissionDecision 协议和 fireLog 审计会一起丢
+  fireLog({ phase: 'deny', reason, sessionId: String(ev?.session_id ?? ev?.sessionId ?? '') });
   process.stdout.write(JSON.stringify({
     permissionDecision: 'deny',
     reason,
