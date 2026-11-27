@@ -5,7 +5,9 @@
 //   · 零依赖：node:http + 原生 fs，进程内除本机适配器(127.0.0.1:3200)外无任何网络请求（§11-15）
 //   · 三态出口：文件不存在 = not_enabled（200，不是 404）；读失败 = degraded；正常 = ready（§6）
 //   · Host 头校验（§11-5）+ 读 120/min 写 10/min 令牌桶 + CSP/nosniff
-// 数据源：fish-adapter/logs/wake.jsonl（尾读 256KB，绝不整文件读）+ 适配器 /stats /health 代理
+// 数据源：fish-adapter/logs/wake.jsonl（尾读 256KB）+ 适配器 /stats /health 代理；
+//   chat.jsonl 走 mtime 缓存热读（chatJsonlLines/todayMessageCount）——轮询路径不整文件读，
+//   只有文件变化后的单次重算才碰全文（2026-11-27 专项债修复，原先是轮询期每次整读+逐行 parse）
 import { createServer, get as httpGet, request as httpRequest } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { execFile, execFileSync, spawn as childSpawn } from 'node:child_process';
@@ -1287,6 +1289,30 @@ function effectiveTaskModel(kind) {
   };
 }
 
+// —— chat.jsonl 热读（审计专项债修复）：apiTaskStatus 处于任务运行期 5 秒轮询路径，原先每次
+// 整文件读 + split 数行/逐行 parse（成本随聊天日志线性增长，违背文件头"绝不整文件读"铁律）。
+// mtime 缓存摊销：文件没变（群里没新消息）直接复用上次结果——只有真来了新消息才重算一次。
+let chatLinesCache = { mtime: 0, lines: 0 };
+function chatJsonlLines() {
+  const st = statSync(join(FISHPOND, 'logs', 'chat.jsonl'));
+  if (st.mtimeMs === chatLinesCache.mtime) return chatLinesCache.lines;
+  chatLinesCache = { mtime: st.mtimeMs, lines: readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length };
+  return chatLinesCache.lines;
+}
+// 今日消息数（日记积压用）：mtime + 本地日双 key 缓存（跨午夜失效），避开轮询路径的逐行 parse
+let todayMsgCache = { mtime: 0, day: '', count: 0 };
+function todayMessageCount(dayStr) {
+  const st = statSync(join(FISHPOND, 'logs', 'chat.jsonl'));
+  if (st.mtimeMs === todayMsgCache.mtime && todayMsgCache.day === dayStr) return todayMsgCache.count;
+  let n = 0;
+  for (const l of readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n')) {
+    if (!l.trim()) continue;
+    try { if (localDay(new Date(JSON.parse(l).ts)) === dayStr) n++; } catch { /* 坏行跳过 */ }
+  }
+  todayMsgCache = { mtime: st.mtimeMs, day: dayStr, count: n };
+  return n;
+}
+
 // ── D5 共享件：三组原本逐字复制的样板收敛 ──
 
 // 配置备份轮换（10 份，时间序）：apiApplyConfig 与 apiEmojiGate 原先两份
@@ -1317,7 +1343,7 @@ function titleKindOf(title) {
 function learnBacklog() {
   try {
     const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
-    const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
+    const chatLines = chatJsonlLines(); // mtime 缓存（chatJsonlLines 注释）
     return { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines + 2 };
   } catch { return null; }
 }
@@ -1493,11 +1519,11 @@ async function runTaskAsync(kind) {
     }
     // 学习游标越界钳制（2026-11-26 二犯，2634=2234+400 精确指纹：AI 拿 offset+limit 算游标
     // 而非实际读到的行数，prompt 红线两犯无效——代码硬闸：任务完成后游标 > 实际行数即回拨+留痕）
-    if (status === 'done' && kind === 'learn') {
+      if (status === 'done' && kind === 'learn') {
       try {
         const curPath = join(FISHPOND, 'memory', '.learner-cursor');
         const cur = Number(readFileSync(curPath, 'utf8').trim());
-        const lines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
+        const lines = chatJsonlLines(); // mtime 缓存（chatJsonlLines 注释）
         if (cur > lines) {
           const tmp = curPath + '.tmp';
           writeFileSync(tmp, String(lines), 'utf8');
@@ -1615,10 +1641,7 @@ function apiTaskStatus() {
     const tf = files.find((f) => f === `${today}.md`);
     let todayMsgs = 0;
     try {
-      for (const l of readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n')) {
-        if (!l.trim()) continue;
-        try { if (localDay(new Date(JSON.parse(l).ts)) === today) todayMsgs++; } catch { /* 坏行跳过 */ }
-      }
+      todayMsgs = todayMessageCount(today); // mtime+日 双 key 缓存（todayMessageCount 注释）
     } catch { /* 无日志 = 0 条素材 */ }
     const streakFrom = new Date();
     if (!daySet.has(today)) streakFrom.setDate(streakFrom.getDate() - 1);

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInbound, isBusy } from './lib/inbound.mjs';
 import { createOutbound, typingDelayMs } from './lib/outbound.mjs';
-import { stripOsHead } from './lib/outbound.mjs';
+import { stripOsHead, sweepStalePerChat } from './lib/outbound.mjs';
 import { parseOutboxBody, startOutboxPolling } from './lib/bridge.mjs';
 
 // 审计日志、计数器都落在 STATE_ROOT（一次性临时目录）下——测试不碰生产文件
@@ -279,6 +279,21 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   ok(stripOsHead('今天天气不错。\n\nsecond line', 'g:1') === '今天天气不错。\n\nsecond line', 'OS1c 非 OS 首段不剥');
   ok(stripOsHead('被 @ 了，得回。', 'g:1') === '被 @ 了，得回。', 'OS1d 单段纯 OS 不剥（宁放过，prompt 反例兜）');
   ok(stripOsHead('被 @ 了，得回。这话我记下了。', 'g:1') === '被 @ 了，得回。这话我记下了。', 'OS1e 超长首段不剥（>14 字非 OS）');
+}
+
+// perChat 复合键淘汰（审计专项债：`${chatKey}|<replyKey>` 原先只增不清，月级内存单调涨）
+{
+  const now = Date.now();
+  const pc = new Map();
+  pc.set('g:1|msg-old', { repliesToLastInbound: 1, ts: now - 40 * 60_000 }); // 超龄复合键
+  pc.set('g:1|msg-new', { repliesToLastInbound: 1, ts: now - 60_000 });      // 窗口内复合键
+  pc.set('g:1|msg-nots', { repliesToLastInbound: 1 });                        // 无 ts 的老复合键（按 0 清）
+  pc.set('g:1', { repliesToLastInbound: 2, proactive: [] });                  // 本体键（不淘汰）
+  const removed = sweepStalePerChat(pc, now);
+  ok(removed === 2 && !pc.has('g:1|msg-old') && !pc.has('g:1|msg-nots'), 'SW1a 超龄/无 ts 复合键被淘汰', `removed=${removed} keys=${[...pc.keys()].join(',')}`);
+  ok(pc.has('g:1|msg-new') && pc.has('g:1'), 'SW1b 窗口内复合键与本体键保留');
+  const pc2 = new Map([['g:2|a', { repliesToLastInbound: 0, ts: now }], ['g:2', { proactive: [] }]]);
+  ok(sweepStalePerChat(pc2, now) === 0, 'SW1c 无超龄时零删除');
 }
 
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);

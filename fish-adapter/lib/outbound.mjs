@@ -174,13 +174,26 @@ function normalize(raw) {
   return { text: '' }; // 兜底：宁可发空走丢弃逻辑，也不抛
 }
 
+// perChat 复合键淘汰（审计专项债）：`${chatKey}|<replyKey>` 每条被回复消息生成一个键，
+// 原先只增不清（月级内存单调上涨）。回复窗口实际只有几分钟——超龄复合键不会有人再读。
+// 本体键（纯 chatKey）数量有限（白名单群+私聊），不淘汰。导出纯函数供单测。
+export function sweepStalePerChat(perChat, now, maxAgeMs = 30 * 60_000) {
+  let removed = 0;
+  for (const [k, v] of perChat) {
+    if (k.includes('|') && (v?.ts ?? 0) < now - maxAgeMs) { perChat.delete(k); removed += 1; }
+  }
+  return removed;
+}
+
 export function createOutbound(cfg, onebot, inboundState) {
-  const perChat = new Map(); // chatKey -> { repliesToLastInbound, proactive: number[] }
+  const perChat = new Map(); // chatKey -> { repliesToLastInbound, proactive: number[], ts }
   const rollWindow = new Map(); // chatKey -> ts[]，同群 5 分钟滚动窗口（防多轮触发叠加刷屏）
   const lastDeferLog = new Map(); // chatKey -> ts，defer 日志节流（轮询 1s 一次，不能每条都打）
   const windowMs = cfg.limits?.maxWindow5MinMs ?? 300_000;
   let dailyCount = 0;
   let daily = dayKey();
+  // 复合键定期淘汰（10 分钟一轮；unref 不挡进程退出，测试多实例无碍）
+  setInterval(() => { sweepStalePerChat(perChat, Date.now()); }, 10 * 60_000).unref?.();
 
   // 启动读回计数器（D13）：跨天清零；损坏按已达上限（保守）
   let countersCorrupted = false;
@@ -447,6 +460,7 @@ export function createOutbound(cfg, onebot, inboundState) {
     if (replyKey != null) {
       const ck = perChat.get(countKey) ?? { repliesToLastInbound: 0, proactive: [] };
       ck.repliesToLastInbound += 1;
+      ck.ts = Date.now(); // 复合键淘汰依据（sweepStalePerChat）
       perChat.set(countKey, ck);
     } else if (isReply) {
       st.repliesToLastInbound += 1;
