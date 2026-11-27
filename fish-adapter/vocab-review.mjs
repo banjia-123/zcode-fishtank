@@ -8,13 +8,13 @@
 //       confirmed 名额 ≤20（信箱任务书只取前 20 条 confirmed，超员尾部读不到）
 // 安全：启动即校验 JSON（坏文件拒审，fail-closed）；首次写盘前自动备份 .bak；
 //       每条决定即时落盘，中途断电/退出已审的不丢；写盘前 JSON 自校验
-import { readFileSync, writeFileSync, copyFileSync, writeSync } from 'node:fs';
+import { readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createInterface } from 'node:readline';
-import { stdin, stdout, exit } from 'node:process';
+import { stdout, exit } from 'node:process';
 import { logOp } from './lib/ops-log.mjs';
 import { acquireLock, releaseLock } from './lib/review-lock.mjs';
+import { outJson, parseApplyPayload, createLineQueue } from './lib/review-common.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FILE = resolve(HERE, '../fishpond/memory/vocab.json');
@@ -28,11 +28,7 @@ if (fi >= 0 && args[fi + 1]) FILE = resolve(args[fi + 1]);
 
 // ── 非交互模式（控制台 spawn）：--list 纯读 / --apply 批量裁决，与下方交互流程互斥 ──
 if (args.includes('--list') || args.includes('--apply')) {
-  const outJson = (code, obj) => {
-    // writeSync 直写 stdout fd，完成后才 exit——同步终止控制流（回调式 exit 有窗口，--list 会掉进 --apply 分支）
-    try { writeSync(1, JSON.stringify(obj) + '\n'); } catch { /* stdout 已关闭等罕见场景 */ }
-    process.exit(code);
-  };
+  // outJson / parseApplyPayload / 行队列：lib/review-common（与 memory-review 共享，D5 收敛）
   const loadVocab = () => {
     const d = JSON.parse(readFileSync(FILE, 'utf8'));
     if (!Array.isArray(d.entries)) throw new Error('entries 不是数组');
@@ -64,18 +60,9 @@ if (args.includes('--list') || args.includes('--apply')) {
 
   // --apply：approve=转正（例句砍到 2 条）/ reject=驳回候选 / retire=下架已上线词
   //   reject 与 retire 不可互串（防误把已上线词当候选删掉）；id=word；批内可部分失败
-  let payload = null;
-  const ji = args.indexOf('--json'), jf = args.indexOf('--json-file');
+  let payload;
   try {
-    const raw = jf >= 0 && args[jf + 1] ? readFileSync(resolve(args[jf + 1]), 'utf8')
-      : ji >= 0 && args[ji + 1] ? args[ji + 1] : null;
-    payload = JSON.parse(raw);
-    if (!payload || !Array.isArray(payload.items)) throw new Error('items 不是数组');
-    for (const it of payload.items) {
-      if (!it || typeof it.id !== 'string' || !['approve', 'reject', 'retire'].includes(it.action)) {
-        throw new Error(`条目字段非法：${JSON.stringify(it ?? null).slice(0, 80)}`);
-      }
-    }
+    payload = parseApplyPayload(args, ['approve', 'reject', 'retire']);
   } catch (e) {
     console.error(`[参数] --apply 需要 --json '{"items":[{"id":"<词>","action":"approve|reject|retire"}]}'（或 --json-file 路径）。${e.message}`);
     exit(2);
@@ -173,24 +160,10 @@ if (!candidates.length && !confirmedList.length) {
   exit(0);
 }
 
-const rl = createInterface({ input: stdin });
+// 自维护行队列（lib/review-common，与 memory-review 共享）：粘贴多行不丢行、
+// EOF 时挂起的 ask 立即失败（已审数据均已落盘）；eofErrOf() 供主循环区分输入中断与写盘失败
+const { rl, ask, eofErr: eofErrOf } = createLineQueue();
 let confirmed = 0, rejected = 0, skipped = 0, retired = 0, kept = 0, saved = false;
-
-// 自维护行队列：readline/promises 的 question 在两次提问间隙会丢掉
-// 已到达的行（粘贴多行/管道输入必丢），这里 line 一到就入队，ask 出队
-// stdin 结束（管道耗尽 / Ctrl+Z）时挂起的 ask 立刻失败 → 已审数据均已落盘
-const lineBuf = [];
-const waiters = [];
-rl.on('line', (l) => { if (waiters.length) waiters.shift()(l); else lineBuf.push(l); });
-let eofErr = null;
-const ask = async (q) => {
-  if (eofErr) throw eofErr;
-  if (lineBuf.length) return lineBuf.shift();
-  return new Promise((res, rej) => {
-    waiters.push(res);
-    rl.once('close', () => rej(eofErr ?? (eofErr = new Error('输入流已结束（EOF）'))));
-  });
-};
 
 const persist = () => {
   if (!saved) { copyFileSync(FILE, FILE + '.bak'); saved = true; } // 首次写盘前备份
@@ -303,7 +276,7 @@ try {
     }
   }
 } catch (e) {
-  if (e === eofErr) {
+  if (e === eofErrOf()) {
     console.log(`\n（输入中断：${e.message}——已决定 ${confirmed + rejected + retired} 条均已落盘，未丢）`);
   } else {
     // 落盘失败（磁盘满/权限）冒泡到这里的，原先被误报成"输入中断且均已落盘"——

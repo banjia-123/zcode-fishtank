@@ -1,5 +1,5 @@
 // 工具集：日志、审计、OneBot 消息文本化、属性转义、配置加载
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,20 @@ export function log(tag, ...parts) {
   const line = `[${new Date().toISOString()}] [${tag}] ${parts.join(' ')}`;
   console.log(line);
   try { appendFileSync(join(LOG_DIR, 'adapter.log'), line + '\n'); } catch { /* 日志失败不阻断业务 */ }
+}
+
+// 热读 JSON 文件（mtime 缓存；同一文件的多个读取方共享一次 stat/parse——D5 收敛原先
+// emojiGateState / typingSecPerChar / selfCheckModel 三处各自为政的同构样板，其中两个
+// 读同一份 config.json 却各 stat 各 parse）。stat/parse 失败原样抛出，降级语义归调用方。
+const hotDocs = new Map(); // 文件绝对路径 -> { mtime, doc }
+export function hotJson(file, pick = (d) => d) {
+  const st = statSync(file);
+  let c = hotDocs.get(file);
+  if (!c || c.mtime !== st.mtimeMs) {
+    c = { mtime: st.mtimeMs, doc: JSON.parse(readFileSync(file, 'utf8')) };
+    hotDocs.set(file, c);
+  }
+  return pick(c.doc);
 }
 
 // 审计告警（D12 脱敏版）：出站敏感信息命中、禁词命中。

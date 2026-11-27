@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { existsSync, appendFileSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, log } from './lib/util.mjs';
+import { hotJson, loadConfig, log } from './lib/util.mjs';
 import { OneBotClient } from './lib/onebot.mjs';
 import { createInbound, dedupHas } from './lib/inbound.mjs';
 import { createOutbound } from './lib/outbound.mjs';
@@ -23,23 +23,18 @@ import { rotateOversizedLogs } from './lib/rotate.mjs';
 const PKG_ROOT = dirname(dirname(fileURLToPath(import.meta.url))); // adapter.mjs → fish-adapter/ → 包根
 
 // —— 自检模型（2026-11-23）：config.tasks.selfCheckModel，缺省 null = 跟随巡逻模型（现状）。
-// 现读 + mtime 缓存（同 outbound 的 emojiGateState 模式）——控制台改完下一个自检周期即生效，无需重启。
-// 模块级（非巡逻闭包内）：/stats 端点与 toolSelfCheck 都要用
-let scmCache = { mtime: 0, val: null };
+// 现读 + mtime 缓存（util.hotJson——与 outbound 的 emojiGate/typing 共享同文件缓存），
+// 控制台改完下一个自检周期即生效，无需重启。模块级（非巡逻闭包内）：/stats 端点与 toolSelfCheck 都要用
 function selfCheckModel() {
   try {
     // 注意：adapter.mjs 的 PKG_ROOT 是两层 dirname = 工作区根（部署布局：fish-adapter 直接在工作区下），
     // 配置文件在 fish-adapter/ 里——按本文件位置取一层 dirname 才对（同 TASK_USAGE_PATH 的写法）
     const p = join(dirname(fileURLToPath(import.meta.url)), 'config.json');
-    const st = statSync(p);
-    if (st.mtimeMs === scmCache.mtime) return scmCache.val;
-    const c = JSON.parse(readFileSync(p, 'utf8')).tasks?.selfCheckModel;
-    const m = c && c.providerId && c.modelId ? {
+    const c = hotJson(p, (d) => d.tasks?.selfCheckModel);
+    return c && c.providerId && c.modelId ? {
       providerId: String(c.providerId), modelId: String(c.modelId),
       ...(c.reasoningLevel ? { reasoningLevel: String(c.reasoningLevel) } : {}),
     } : null;
-    scmCache = { mtime: st.mtimeMs, val: m };
-    return m;
   } catch (e) { log('selfcheck', `WARN selfCheckModel 读 config 失败，本轮自检按无覆盖模型（用巡逻默认模型）: ${e.message}`); return null; }
 }
 

@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { log } from '../lib/util.mjs';
+import { fishpondDir } from './prompt.mjs';
 
 const PKG_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url)))); // wake/ → fish-adapter/ → 包根
 
@@ -61,7 +62,8 @@ export const DENY_ALL = [
 
 export function createAppServerClient(cfg) {
   const CLI = cfg.patrol?.cliPath;
-  const WORKSPACE = cfg.bridge?.fishpondDir ?? join(PKG_ROOT, 'fishpond');
+  // fishpond 目录回退逻辑与 prompt.mjs 同源（原先两处各写一份 join(PKG_ROOT, 'fishpond')）
+  const WORKSPACE = fishpondDir(cfg, PKG_ROOT);
   const model = cfg.patrol?.model ?? {};
 
   let child = null;

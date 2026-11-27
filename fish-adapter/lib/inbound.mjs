@@ -105,6 +105,16 @@ export function isBusy(chatKey, cfg) {
 const ATTACH_TTL_MS = 60 * 60 * 1000; // 附件保留 1 小时（12 个轮询轮内可回看，过期由 cleanAttachments 清）
 const IMG_MAX_BYTES = 10 * 1024 * 1024;
 
+// 共享下载管线（D5 收敛）：消息图片与卡片封面同构——fetch/10s 超时/大小上限/写盘。
+// 失败抛错，降级语义（占位文案/日志）归调用方。原先两处各写一份（卡片侧大小上限还硬编码）
+async function downloadImage(url, destAbs) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length === 0 || buf.length > IMG_MAX_BYTES) throw new Error('bad size ' + buf.length);
+  writeFileSync(destAbs, buf);
+}
+
 async function attachImages(cfg, event, text, chatKey) {
   const urls = collectImages(event);
   if (!urls.length) return text;
@@ -117,17 +127,13 @@ async function attachImages(cfg, event, text, chatKey) {
     n++;
     const at = out.indexOf('[图片]');
     if (at === -1) break; // 占位与 url 数不齐的异常报文：剩余保持原样
-    let rel = null;
+    let rel = `attachments/inbox/${Date.now()}-${event.message_id ?? 'noid'}-img${n}${guessImageExt(url)}`;
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length === 0 || buf.length > IMG_MAX_BYTES) throw new Error('bad size ' + buf.length);
-      rel = `attachments/inbox/${Date.now()}-${event.message_id ?? 'noid'}-img${n}${guessImageExt(url)}`;
-      writeFileSync(join(base, rel), buf);
+      await downloadImage(url, join(base, rel));
       // 复核池（2026-11-26 按需复核）：图话题的后续批次可重新附带这张图（TTL 5 分钟内）
       recordImg(chatKey, rel);
     } catch (e) {
+      rel = null;
       log('inbound', `image download failed (msg=${event.message_id} #${n}): ${e.message}`);
     }
     out = out.slice(0, at) + (rel ? `[图片: ${rel}]` : '[图片: 下载失败]') + out.slice(at + '[图片]'.length);
@@ -168,14 +174,11 @@ async function attachCards(cfg, event, text) {
     if (card) {
       let coverRel = null;
       if (card.cover) {
+        const ext = /\.(jpe?g|png|webp|gif)/i.exec(card.cover)?.[1]?.toLowerCase() ?? 'jpg';
+        const relTry = `attachments/inbox/${Date.now()}-card${n}.${ext === 'jpeg' ? 'jpg' : ext}`;
         try {
-          const res = await fetch(card.cover, { signal: AbortSignal.timeout(10_000) });
-          if (!res.ok) throw new Error('HTTP ' + res.status);
-          const buf = Buffer.from(await res.arrayBuffer());
-          if (buf.length === 0 || buf.length > 10 * 1024 * 1024) throw new Error('bad size ' + buf.length);
-          const ext = /\.(jpe?g|png|webp|gif)/i.exec(card.cover)?.[1]?.toLowerCase() ?? 'jpg';
-          coverRel = `attachments/inbox/${Date.now()}-card${n}.${ext === 'jpeg' ? 'jpg' : ext}`;
-          writeFileSync(join(base, coverRel), buf);
+          await downloadImage(card.cover, join(base, relTry));
+          coverRel = relTry;
         } catch (e) {
           log('inbound', `card cover download failed: ${e.message}`);
         }

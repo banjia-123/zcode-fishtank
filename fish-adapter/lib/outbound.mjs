@@ -3,7 +3,7 @@
 // → ⑥ 限额 → ⑦ 分段发送（部分成功即成功，不整条重发）
 // 入参归一化（D7，永久保留）：老格式 {text} / 新格式 {lines,reply_to,sticker,voice,silent} / 纯字符串
 // HTTP 回调（/zcode）与文件桥（outbox 轮询）共用 processMessage 核心。
-import { auditAlert, log, ROOT_DIR } from './util.mjs';
+import { auditAlert, hotJson, log, ROOT_DIR } from './util.mjs';
 import { isBusy } from './inbound.mjs';
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -58,18 +58,14 @@ const EMOJI_GATE_DEFAULT = { enabled: true, window: 5, max: 2 };
 // 硬闸永远走默认值——控制台开关从未生效过。配置在包根 config.json（= ROOT_DIR）；测试隔离下 ROOT_DIR
 // 指向临时目录、读不到即走默认，行为不变。
 const EMOJI_GATE_FILE = join(ROOT_DIR, 'config.json');
-let gateCache = { mtime: 0, state: { ...EMOJI_GATE_DEFAULT } };
 function emojiGateState() {
   try {
-    const st = statSync(EMOJI_GATE_FILE);
-    if (st.mtimeMs === gateCache.mtime) return gateCache.state;
-    const g = JSON.parse(readFileSync(EMOJI_GATE_FILE, 'utf8')).emojiGate ?? {};
-    gateCache = { mtime: st.mtimeMs, state: {
+    const g = hotJson(EMOJI_GATE_FILE, (d) => d.emojiGate ?? {}) ?? {};
+    return {
       enabled: g.enabled !== false,
       window: Math.max(2, Number(g.window) || 5),
       max: Math.max(1, Number(g.max) || 2),
-    } };
-    return gateCache.state;
+    };
   } catch (e) { log('outbound', `WARN emojiGate 读 config 失败，回退默认 ${JSON.stringify(EMOJI_GATE_DEFAULT)}: ${e.message}`); return { ...EMOJI_GATE_DEFAULT }; }
 }
 // —— 拟真打字节奏（2026-11-25，借鉴 dsh-sansan-qq 的 typingDelayMs）——
@@ -77,15 +73,11 @@ function emojiGateState() {
 // 下限 1500ms 与旧算法下限一致（防洪节奏不变，测试 2b/T1b 断言零修改兼容）；
 // 上限 8000ms 防长行极端（60 字截断已物理限长）。
 // typingSecPerChar 现读 config（mtime 缓存，同 emojiGateState 模式）：≤0 或显式 0 = 回退旧随机节奏。
-const TYPING_FILE = EMOJI_GATE_FILE; // 同源：包根 config.json
-let typingCache = { mtime: 0, secPerChar: 0.15 };
+const TYPING_FILE = EMOJI_GATE_FILE; // 同源：包根 config.json（与 emojiGate 共享 hotJson 的同文件缓存）
 function typingSecPerChar() {
   try {
-    const st = statSync(TYPING_FILE);
-    if (st.mtimeMs === typingCache.mtime) return typingCache.secPerChar;
-    const n = Number(JSON.parse(readFileSync(TYPING_FILE, 'utf8')).limits?.typingSecPerChar);
-    typingCache = { mtime: st.mtimeMs, secPerChar: n > 0 ? n : (n === 0 ? 0 : 0.15) };
-    return typingCache.secPerChar;
+    const n = Number(hotJson(TYPING_FILE, (d) => d.limits?.typingSecPerChar));
+    return n > 0 ? n : (n === 0 ? 0 : 0.15);
   } catch (e) { log('outbound', `WARN typingSecPerChar 读 config 失败，回退 0.15: ${e.message}`); return 0.15; }
 }
 // 纯函数可单测：secPerChar 无效（≤0/NaN）走旧分支 1500~4000ms
@@ -464,6 +456,11 @@ export function createOutbound(cfg, onebot, inboundState) {
       perChat.set(chatKey, st);
     }
 
+    // 发送分支（D5 收敛）：群/私聊 + 纯数字 ID 归一（OneBot 要 Number）——原先纯表情/文字循环两处四份同构
+    const sendMsg = (message) => chatType === 'group'
+      ? onebot.action('send_group_msg', { group_id: /^\d+$/.test(chatId) ? Number(chatId) : chatId, message })
+      : onebot.action('send_private_msg', { user_id: /^\d+$/.test(userId) ? Number(userId) : userId, message });
+
     try {
       // 纯表情（无文字）：只发一条 image 消息；否则文字段逐条发，首段挂引用、末段拼表情（图文同条）
       let r = null;
@@ -472,9 +469,7 @@ export function createOutbound(cfg, onebot, inboundState) {
       if (!segments.length && emojiSeg) {
         const message = [emojiSeg];
         if (replyToId != null) message.unshift({ type: 'reply', data: { id: replyToId } });
-        r = chatType === 'group'
-          ? await onebot.action('send_group_msg', { group_id: /^\d+$/.test(chatId) ? Number(chatId) : chatId, message })
-          : await onebot.action('send_private_msg', { user_id: /^\d+$/.test(userId) ? Number(userId) : userId, message });
+        r = await sendMsg(message);
         if (r && r.status === 'ok') sent = 1; else lastErr = r;
       } else {
         for (let i = 0; i < segments.length; i++) {
@@ -484,13 +479,7 @@ export function createOutbound(cfg, onebot, inboundState) {
           const message = [{ type: 'text', data: { text: segments[i] } }];
           if (i === segments.length - 1 && emojiSeg) message.push(emojiSeg);
           if (i === 0 && replyToId != null) message.unshift({ type: 'reply', data: { id: replyToId } }); // 引用只挂首条
-          if (chatType === 'group') {
-            const gid = /^\d+$/.test(chatId) ? Number(chatId) : chatId;
-            r = await onebot.action('send_group_msg', { group_id: gid, message });
-          } else {
-            const uid = /^\d+$/.test(userId) ? Number(userId) : userId;
-            r = await onebot.action('send_private_msg', { user_id: uid, message });
-          }
+          r = await sendMsg(message);
           if (!r || r.status !== 'ok') { lastErr = r; break; }
           sent += 1;
         }

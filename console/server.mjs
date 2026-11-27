@@ -579,13 +579,7 @@ function apiApplyConfig(body) {
   if (st.baseVersion !== tk.baseVersion) throw httpErr(409, 'E_CONFLICT', '配置在预览后被外部修改——拒绝落盘，请重新预览');
   // 备份（保留 10 份，时间序轮换）
   let backupId = null;
-  try {
-    mkdirSync(CONFIG_BACKUP_DIR, { recursive: true });
-    backupId = `config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    writeFileSync(join(CONFIG_BACKUP_DIR, backupId), st.raw, 'utf8');
-    const olds = readdirSync(CONFIG_BACKUP_DIR).filter((f) => f.startsWith('config-')).sort();
-    while (olds.length > 10) unlinkSync(join(CONFIG_BACKUP_DIR, olds.shift()));
-  } catch (e) { throw httpErr(500, 'E_IO', `备份失败（未写入）：${e.message}`); }
+  try { backupId = backupRotateConfig(st.raw); } catch (e) { throw httpErr(500, 'E_IO', `备份失败（未写入）：${e.message}`); }
   // 原子写：tmp → rename（写失败原文件不动）
   try {
     const tmp = CONFIG_PATH + '.tmp';
@@ -935,13 +929,7 @@ function apiEmojiGate(body) {
   const newRaw = JSON.stringify(cur, null, 2) + '\n';
   // 备份轮换（与两段式同款，10 份）
   let backupId = null;
-  try {
-    mkdirSync(CONFIG_BACKUP_DIR, { recursive: true });
-    backupId = `config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
-    writeFileSync(join(CONFIG_BACKUP_DIR, backupId), st.raw, 'utf8');
-    const olds = readdirSync(CONFIG_BACKUP_DIR).filter((f) => f.startsWith('config-')).sort();
-    while (olds.length > 10) unlinkSync(join(CONFIG_BACKUP_DIR, olds.shift()));
-  } catch (e) { throw httpErr(500, 'E_IO', `备份失败（未写入）：${e.message}`); }
+  try { backupId = backupRotateConfig(st.raw); } catch (e) { throw httpErr(500, 'E_IO', `备份失败（未写入）：${e.message}`); }
   const tmp = CONFIG_PATH + '.tmp';
   writeFileSync(tmp, newRaw, 'utf8');
   try { JSON.parse(readFileSync(tmp, 'utf8')); } catch (e) { unlinkSync(tmp); throw httpErr(500, 'E_IO', `回读校验失败：${e.message}`); }
@@ -1215,14 +1203,7 @@ function apiAutomations() {
     // 每任务 run 聚合（次数 + 最近结果）
     const runs = db.prepare('SELECT automation_id, COUNT(*) n, MAX(scheduled_at) last, SUM(CASE WHEN outcome = \'succeeded\' THEN 1 ELSE 0 END) ok FROM automation_runs GROUP BY automation_id').all();
     const byId = new Map(runs.map((r) => [r.automation_id, r]));
-    const kindOf = (title) => {
-      const t = String(title ?? '');
-      if (t.includes('学习')) return 'learn';
-      if (t.includes('信箱')) return 'inbox';
-      if (t.includes('日记')) return 'diary';
-      if (t.includes('清理') || t.includes('维护')) return 'clean';
-      return 'other';
-    };
+    const kindOf = titleKindOf;
     items = rows.map((r) => {
       const agg = byId.get(r.automation_id);
       return {
@@ -1245,15 +1226,8 @@ function apiAutomations() {
     try { db?.close(); } catch { /* 已关 */ }
   }
 
-  // 学习积压：.learner-cursor（已学到行）vs logs/chat.jsonl 总行数
-  // cursorOverflow（2026-11-22 实测）：learner 会话自己 Edit 游标无钳制，一次虚推到 2556（实际仅 2198 行）
-  // → 积压永远算 0、空跑短路永远触发、学习链路静默断裂。这里标出越界，卡片显红，修游标前一眼可见。
-  let backlog = null;
-  try {
-    const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
-    const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
-    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines + 2 };
-  } catch { /* 任一文件缺失 → 不显示 */ }
+  // 学习积压：.learner-cursor（已学到行）vs logs/chat.jsonl 总行数（含 cursorOverflow 显红，见 learnBacklog 注释）
+  let backlog = learnBacklog(); // 任一文件缺失 → null 不显示
   let vocabMtime = null;
   try { vocabMtime = statSync(join(FISHPOND, 'memory', 'vocab.json')).mtime.toISOString(); } catch { /* 无 */ }
 
@@ -1311,6 +1285,41 @@ function effectiveTaskModel(kind) {
     providerId: String(src.providerId), modelId: String(src.modelId),
     ...(src.reasoningLevel || src.options?.reasoningLevel ? { options: { reasoningLevel: src.reasoningLevel ?? src.options?.reasoningLevel } } : {}),
   };
+}
+
+// ── D5 共享件：三组原本逐字复制的样板收敛 ──
+
+// 配置备份轮换（10 份，时间序）：apiApplyConfig 与 apiEmojiGate 原先两份
+function backupRotateConfig(raw) {
+  mkdirSync(CONFIG_BACKUP_DIR, { recursive: true });
+  const backupId = `config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  writeFileSync(join(CONFIG_BACKUP_DIR, backupId), raw, 'utf8');
+  const olds = readdirSync(CONFIG_BACKUP_DIR).filter((f) => f.startsWith('config-')).sort();
+  while (olds.length > 10) unlinkSync(join(CONFIG_BACKUP_DIR, olds.shift()));
+  return backupId;
+}
+
+// 任务标题 → kind（apiAutomations 与 apiTaskRemove 快照原先两份同构）
+function titleKindOf(title) {
+  const t = String(title ?? '');
+  if (t.includes('学习')) return 'learn';
+  if (t.includes('信箱')) return 'inbox';
+  if (t.includes('日记')) return 'diary';
+  if (t.includes('清理') || t.includes('维护')) return 'clean';
+  return 'other';
+}
+
+// 学习积压快照（apiAutomations / apiTaskRun / apiTaskStatus 原先三份同构）。
+// null = 游标或日志读不到（调用方各自决定缺文件时"不显示/放行"）。
+// cursorOverflow（2026-11-22 实测）：learner 会话自己 Edit 游标无钳制，一次虚推到 2556（实际仅 2198 行）
+// → 积压永远算 0、空跑短路永远触发、学习链路静默断裂。越界标出，卡片显红。
+// +2 容忍带：AI 数行有 off-by-one 固有误差（11-22 实测重学 42 行写 2199，实际 2198），1~2 行无害自愈
+function learnBacklog() {
+  try {
+    const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
+    const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
+    return { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines + 2 };
+  } catch { return null; }
 }
 
 const taskRuns = new Map(); // kind -> { status, startedAt, finishedAt, sessionId, error }
@@ -1383,7 +1392,7 @@ function apiTaskRemove(body) {
     db = new DatabaseSync(TASK_DB);
     const row = db.prepare('SELECT automation_id, title, cron_expr, prompt, model_selection FROM automations WHERE automation_id = ?').get(body.id);
     if (!row) throw httpErr(404, 'E_NOT_FOUND', '任务库里没有这条 automation（可能已删）');
-    const kindOf = (t) => { const s = String(t ?? ''); return s.includes('学习') ? 'learn' : s.includes('信箱') ? 'inbox' : s.includes('日记') ? 'diary' : s.includes('清理') || s.includes('维护') ? 'clean' : 'other'; };
+    const kindOf = titleKindOf;
     const snap = readTasksManual();
     snap.archivedAt = new Date().toISOString();
     snap.tasks[kindOf(row.title) + '_' + row.automation_id.slice(-6)] = {
@@ -1564,17 +1573,13 @@ function apiTaskRun(body) {
   if (cur?.status === 'running') throw httpErr(409, 'E_RUNNING', `「${kind === 'learn' ? '学习' : '写日记'}」正在运行中（${Math.round((Date.now() - cur.startedAt) / 1000)}s），等它完成`);
   // 空跑短路（每次启动 ~35K tok 的固定开销，积压 0 时纯浪费）：
   if (kind === 'learn') {
-    let unlearned = null;
-    try {
-      const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
-      const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
-      unlearned = Math.max(0, chatLines - cursor);
+    const bl = learnBacklog();
+    if (bl) {
       // 游标越界（虚推超过实际行数）时积压恒为 0——不能让"积压 0"把学习永久短路，
-      // 提示里点名，让人一眼看到该修游标而不是以为没新消息。
-      // +2 容忍带：AI 数行有 off-by-one 固有误差（11-22 实测重学 42 行写 2199，实际 2198），1~2 行无害自愈
-      if (cursor > chatLines + 2) return { started: false, skipped: 'cursor-overflow', message: `游标越界（已学到 ${cursor} 行 > 日志现有 ${chatLines} 行）——游标虚高，学习被拦下；请回拨 .learner-cursor 后重试` };
-    } catch { /* 读不到就放行，让任务自己处理 */ }
-    if (unlearned === 0) return { started: false, skipped: 'no-backlog', message: '积压 0 行——没有新消息可学，本次跳过（不调模型）' };
+      // 提示里点名，让人一眼看到该修游标而不是以为没新消息
+      if (bl.cursorOverflow) return { started: false, skipped: 'cursor-overflow', message: `游标越界（已学到 ${bl.cursor} 行 > 日志现有 ${bl.chatLines} 行）——游标虚高，学习被拦下；请回拨 .learner-cursor 后重试` };
+      if (bl.unlearned === 0) return { started: false, skipped: 'no-backlog', message: '积压 0 行——没有新消息可学，本次跳过（不调模型）' };
+    } // null = 读不到就放行，让任务自己处理
   }
   if (kind === 'diary' && existsSync(join(FISHPOND, 'diary', `${localDay(new Date())}.md`))) {
     // 今日日记已存在 = 任务书"同名跳过"铁律的前置短路，省一次模型调用
@@ -1597,12 +1602,7 @@ function apiTaskStatus() {
   const withDiag = { ...runs };
   if (taskEventLog.length) withDiag.__events = taskEventLog.slice(0, 10);
   // 学习积压（cursorOverflow 同 apiAutomations：虚推越界要显红，学习链路静默断裂不能无感知）
-  let backlog = null;
-  try {
-    const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
-    const chatLines = readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length;
-    backlog = { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines + 2 };
-  } catch { /* 缺文件不显示 */ }
+  let backlog = learnBacklog(); // 缺文件 → null 不显示
   let vocabMtime = null;
   try { vocabMtime = statSync(join(FISHPOND, 'memory', 'vocab.json')).mtime.toISOString(); } catch { /* 无 */ }
   // 日记积压（G9 加菜）：今日是否已写 / 今日素材（今天群消息行数）/ 连续记录 / 最近 7 天缺口。

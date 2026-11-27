@@ -8,14 +8,14 @@
 //       删除 = 两边都不要；跳过 = 留观，下次再审
 // 红线：core.md 总行数 ≤60（信箱任务书只读前 60 行，超了鱼读不到尾部）
 // 安全：首次写盘自动备份 .bak；每条决定即时落盘，中断不丢已审的
-import { readFileSync, writeFileSync, copyFileSync, writeSync } from 'node:fs';
+import { readFileSync, writeFileSync, copyFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createInterface } from 'node:readline';
-import { stdin, stdout, exit } from 'node:process';
+import { stdout, exit } from 'node:process';
 import { logOp } from './lib/ops-log.mjs';
 import { acquireLock, releaseLock } from './lib/review-lock.mjs';
+import { outJson, parseApplyPayload, createLineQueue } from './lib/review-common.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORE_MAX_LINES = 60;
@@ -40,12 +40,7 @@ const usedLinesOf = (lines) => {
 
 // ── 非交互模式（控制台 spawn）：--list 纯读 / --apply 批量裁决，与下方交互流程互斥 ──
 if (args.includes('--list') || args.includes('--apply')) {
-  const outJson = (code, obj) => {
-    // writeSync 直写 stdout fd，完成后才 exit——同步终止控制流（回调式 exit 有窗口，--list 会掉进 --apply 分支）
-    try { writeSync(1, JSON.stringify(obj) + '\n'); } catch { /* stdout 已关闭等罕见场景 */ }
-    process.exit(code);
-  };
-
+  // outJson / parseApplyPayload / 行队列：lib/review-common（与 vocab-review 共享，D5 收敛）
   if (args.includes('--list')) {
     // 纯读：绝不写盘、不备份、不上锁。candidates.md 缺失 = 还没有候选，不是错误
     let lines = [];
@@ -67,18 +62,9 @@ if (args.includes('--list') || args.includes('--apply')) {
 
   // --apply：批内 id 可部分失败（不整批回滚），写盘前 .bak 备份，全程持 review.lock
   // 动作：approve=迁入 core.md / reject=删候选 / remove-core=从 core.md 删已生效行（G5b 删除提案闭环）
-  let payload = null;
-  const ji = args.indexOf('--json'), jf = args.indexOf('--json-file');
+  let payload;
   try {
-    const raw = jf >= 0 && args[jf + 1] ? readFileSync(resolve(args[jf + 1]), 'utf8')
-      : ji >= 0 && args[ji + 1] ? args[ji + 1] : null;
-    payload = JSON.parse(raw);
-    if (!payload || !Array.isArray(payload.items)) throw new Error('items 不是数组');
-    for (const it of payload.items) {
-      if (!it || typeof it.id !== 'string' || !['approve', 'reject', 'remove-core'].includes(it.action)) {
-        throw new Error(`条目字段非法：${JSON.stringify(it ?? null).slice(0, 80)}`);
-      }
-    }
+    payload = parseApplyPayload(args, ['approve', 'reject', 'remove-core']);
   } catch (e) {
     console.error(`[参数] --apply 需要 --json '{"items":[{"id":"<行号>","action":"approve|reject"}]}'（或 --json-file 路径）。${e.message}`);
     exit(2);
@@ -189,18 +175,9 @@ if (!entries.length) {
 }
 console.log(`待审 ${entries.length} 条 · core.md 现 ${coreCount()} 条 / ${usedLines()} 行（红线 ${CORE_MAX_LINES}）\n`);
 
-const rl = createInterface({ input: stdin });
-const lineBuf = [], waiters = [];
-rl.on('line', (l) => { if (waiters.length) waiters.shift()(l); else lineBuf.push(l); });
-let eofErr = null;
-const ask = async () => {
-  if (eofErr) throw eofErr;
-  if (lineBuf.length) return lineBuf.shift();
-  return new Promise((res, rej) => {
-    waiters.push(res);
-    rl.once('close', () => rej(eofErr ?? (eofErr = new Error('输入流已结束（EOF）'))));
-  });
-};
+// 自维护行队列（lib/review-common，与 vocab-review 共享）：粘贴多行不丢行、
+// EOF 时挂起的 ask 立即失败（已审数据均已落盘）；eofErrOf() 供主循环区分输入中断与写盘失败
+const { rl, ask, eofErr: eofErrOf } = createLineQueue();
 
 let candSaved = false, coreSaved = false;
 const writeCand = () => {
@@ -266,7 +243,7 @@ try {
     }
   }
 } catch (e) {
-  if (e === eofErr) {
+  if (e === eofErrOf()) {
     console.log(`\n（输入中断：${e.message}——已审 ${moved + dropped} 条均已落盘，未丢）`);
   } else {
     // 落盘失败（磁盘满/权限）冒泡到这里的，原先被误报成"输入中断且均已落盘"——

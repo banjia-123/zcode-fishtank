@@ -1,4 +1,8 @@
 // OneBot v11 客户端：WS 收事件推送（自动重连+退避），HTTP 发 action
+// log 静态引入（util 是叶子模块无循环依赖；历史上用动态 import 是多余的——每条 WS 事件
+// 都白走一遍 promise 链，重连/心跳/收发全在热路径上）
+import { log } from './util.mjs';
+
 export class OneBotClient {
   constructor(cfg) {
     this.cfg = cfg;
@@ -29,21 +33,21 @@ export class OneBotClient {
     this.ws = ws;
     ws.addEventListener('open', () => {
       this.retry = 0;
-      import('./util.mjs').then(({ log }) => log('onebot', `WS connected: ${wsUrl}`));
+      log('onebot', `WS connected: ${wsUrl}`);
     });
     ws.addEventListener('message', (ev) => {
       let data;
-      try { data = JSON.parse(String(ev.data)); } catch { import('./util.mjs').then(({ log }) => log('onebot', 'WARN 收到非 JSON WS 帧，已忽略')); return; }
+      try { data = JSON.parse(String(ev.data)); } catch { log('onebot', 'WARN 收到非 JSON WS 帧，已忽略'); return; }
       // 只转发消息事件；心跳/元事件直接忽略
       if (data && data.post_type === 'message' && this.onEvent) {
         Promise.resolve(this.onEvent(data)).catch((e) => {
-          import('./util.mjs').then(({ log }) => log('inbound', `handler error: ${e.message}`));
+          log('inbound', `handler error: ${e.message}`);
         });
       }
     });
     ws.addEventListener('close', () => this._reconnect('closed'));
     ws.addEventListener('error', (e) => {
-      import('./util.mjs').then(({ log }) => log('onebot', `WS error: ${e?.message ?? ''}`));
+      log('onebot', `WS error: ${e?.message ?? ''}`);
       this._reconnect('error');
     });
   }
@@ -52,7 +56,7 @@ export class OneBotClient {
     if (this.stopped) return;
     this.retry += 1;
     const delay = Math.min(30_000, 1000 * 2 ** Math.min(this.retry, 5));
-    import('./util.mjs').then(({ log }) => log('onebot', `${why}, retry in ${delay}ms (attempt ${this.retry})`));
+    log('onebot', `${why}, retry in ${delay}ms (attempt ${this.retry})`);
     setTimeout(() => this._connect(), delay);
   }
 

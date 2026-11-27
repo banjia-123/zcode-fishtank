@@ -42,7 +42,8 @@ export function ensureBridgeDirs(cfg) {
 // 信箱索引：鱼会话无 Glob，用固定路径 .index.json 枚举待处理文件（适配器维护）
 // 索引截断（P1 调优 + D6）：pending 只保留最新 maxPending 条；挤出必留痕 dropped.jsonl，
 // 必回消息（must）优先保留（优先挤非 must，全是 must 才丢最旧并告警）——禁止静默 unlink
-function updateIndex(inbox, mutator, maxPending = 50) {
+const MAX_PENDING_DEFAULT = 50; // 索引上限默认（原三处各写一份 50）
+function updateIndex(inbox, mutator, maxPending = MAX_PENDING_DEFAULT) {
   const indexFile = join(inbox, '.index.json');
   let idx = { pending: [] };
   try { idx = JSON.parse(readFileSync(indexFile, 'utf8')); } catch (e) {
@@ -77,7 +78,7 @@ export function writeInboxFile(cfg, payload, opts = {}) {
   const name = `${ts}-${payload.messageId ?? 'noid'}.json`;
   writeFileSync(join(inbox, name), JSON.stringify(payload, null, 1), 'utf8');
   if (!opts.archive) {
-    const max = cfg.p1?.maxPendingPerPoll ?? 50;
+    const max = cfg.p1?.maxPendingPerPoll ?? MAX_PENDING_DEFAULT;
     updateIndex(inbox, (idx) => { idx.pending.push({ f: name, must: Boolean(payload.must) }); }, max);
   }
   log('bridge', `inbound → ${name} (${payload.chatType} ${payload.chatId ?? payload.userId}${payload.must ? ' must' : ''}${opts.archive ? ' archive' : ''})`);
@@ -188,7 +189,7 @@ export function startOutboxPolling(cfg, processMessage, intervalMs = 1000) {
         if (r.action === 'sent' || r.action === 'dropped') {
           try {
             unlinkSync(join(bridgeDirs(cfg).inbox, f));
-            updateIndex(bridgeDirs(cfg).inbox, (idx) => { idx.pending = idx.pending.filter((x) => x.f !== f); }, cfg.p1?.maxPendingPerPoll ?? 50);
+            updateIndex(bridgeDirs(cfg).inbox, (idx) => { idx.pending = idx.pending.filter((x) => x.f !== f); }, cfg.p1?.maxPendingPerPoll ?? MAX_PENDING_DEFAULT);
             log('bridge', `inbox ${f} 已清理`);
           } catch { /* 不存在或已清 */ }
         }
