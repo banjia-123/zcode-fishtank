@@ -5,7 +5,7 @@ import { buildPrompt } from './wake/prompt.mjs';
 import { fillPlaceholders, toPlaceholders } from './lib/placeholder.mjs';
 import { appendNote } from './lib/sticky.mjs';
 import { chatKeyToPeerKey } from './lib/peer-store.mjs';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ROOT_DIR } from './lib/util.mjs';
@@ -101,6 +101,36 @@ try {
   const p10 = buildPrompt({}, [mkMsg('这不是边界标记段，只是普通文本')], { personaDir: dir });
   ok(p10.includes('没有解析出任何消息段') && p10.includes('[SILENT]'), 'P10a 空批次注入警告段+指示 [SILENT]', p10.slice(-140));
   ok(!p10.includes('<group_message'), 'P10b 无消息段混入');
+
+  // P11 认人名册（2026-11-27 砍形态版）：只注 confirmed+当前群；candidate/他群/私聊/无文件全不注
+  const dir3 = mkdtempSync(join(tmpdir(), 'fish-roster-'));
+  try {
+    writeFileSync(join(dir3, 'persona.md'), '# 人格\nx', 'utf8');
+    mkdirSync(join(dir3, 'memory'), { recursive: true });
+    writeFileSync(join(dir3, 'memory', 'roster.json'), JSON.stringify({
+      entries: [
+        { uid: '1', nick: '阿明', activity: 'high', note: '教过吾认图', status: 'confirmed', source: '777' },
+        { uid: '2', nick: '候选君', activity: 'high', note: 'x', status: 'candidate', source: '777' },
+        { uid: '3', nick: '他群的', activity: 'high', note: 'x', status: 'confirmed', source: '999' },
+      ],
+    }), 'utf8');
+    const msg = mkMsg('<group_message from="a" uid="1">早</group_message>');
+    const p11 = buildPrompt({}, [msg], { personaDir: dir3, chatKey: 'g:777' });
+    ok(p11.includes('【这个群的常客（认人名册）】') && p11.includes('阿明（常在）：教过吾认图'), 'P11a confirmed+当前群条目注入');
+    ok(!p11.includes('候选君') && !p11.includes('他群的'), 'P11b candidate/他群条目不注入（闸门+按群隔离）');
+    ok(p11.includes('名册只用来认人'), 'P11c 输出纪律行带上（防议论）');
+    const p11d = buildPrompt({}, [msg], { personaDir: dir3, chatKey: 'p:1' });
+    ok(!p11d.includes('认人名册'), 'P11d 私聊不注名册（主人画像在 core.md）');
+    // 8 人截断（P12）：第 9 名不注入
+    writeFileSync(join(dir3, 'memory', 'roster.json'), JSON.stringify({
+      entries: Array.from({ length: 9 }, (_, i) => ({ uid: String(100 + i), nick: `群友${i}号`, activity: 'mid', note: `备注${i}`, status: 'confirmed', source: '777' })),
+    }), 'utf8');
+    const p12 = buildPrompt({}, [msg], { personaDir: dir3, chatKey: 'g:777' });
+    ok(p12.includes('群友7号') && !p12.includes('群友8号'), 'P12 注入上限 8 人（第 9 名截断）', (p12.match(/群友\d号/g) ?? []).join(','));
+  } finally { try { rmSync(dir3, { recursive: true, force: true }); } catch { /* 临时目录 */ } }
+  // 无 roster 文件（P13）：不炸不渲染段
+  const p13 = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir, chatKey: 'g:777' });
+  ok(!p13.includes('认人名册'), 'P13 无名册文件不炸、段不渲染');
 } finally {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败无妨（临时目录） */ }
 }

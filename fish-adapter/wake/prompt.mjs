@@ -10,6 +10,34 @@ import { log } from '../lib/util.mjs';
 
 const SEG_RE = /<(?:group|private)_message[\s\S]*?<\/(?:group|private)_message>/g;
 
+// 认人名册（2026-11-27，借鉴 MaiBot 画像层的砍形态版）：只取 confirmed 的稳定公开事实
+// （昵称/活跃度/与鱼互动），让鱼"看到昵称知道是谁"——不做行为归纳（AI 归纳性格/口头禅错误
+// 率高，错误画像经人工批准后固化比没有更糟）。闸门与 vocab 同构：学习任务只产 candidate，
+// 注入只取 confirmed——未审条目物理上到不了鱼眼前。mtime 缓存按群拆行（命中时零解析）。
+let rosterCache = { mtime: 0, byGroup: new Map() };
+const ACTIVITY_LABEL = { high: '常在', mid: '偶尔在', low: '少来' };
+function renderRoster(chatKey, personaDir) {
+  if (!String(chatKey ?? '').startsWith('g:')) return ''; // 私聊不注名册（主人的画像在 core.md）
+  const group = String(chatKey).slice(2);
+  try {
+    const p = join(personaDir, 'memory', 'roster.json');
+    const st = statSync(p);
+    if (st.mtimeMs !== rosterCache.mtime) {
+      const j = JSON.parse(readFileSync(p, 'utf8'));
+      const byGroup = new Map();
+      for (const e of (Array.isArray(j.entries) ? j.entries : [])) {
+        if (e?.status !== 'confirmed' || e?.uid == null || e?.source == null) continue;
+        const list = byGroup.get(String(e.source)) ?? [];
+        list.push(`- ${String(e.nick ?? e.uid)}（${ACTIVITY_LABEL[e.activity] ?? '在'}）：${String(e.note ?? '').slice(0, 30)}`);
+        byGroup.set(String(e.source), list);
+      }
+      for (const [g, list] of byGroup) byGroup.set(g, list.slice(0, 8).join('\n')); // 注入上限 8 人
+      rosterCache = { mtime: st.mtimeMs, byGroup };
+    }
+    return rosterCache.byGroup.get(group) ?? '';
+  } catch { return ''; } // 无名册文件 = 功能未启用
+}
+
 export function fishpondDir(cfg, pkgRoot) {
   return cfg.bridge?.fishpondDir ?? join(pkgRoot, 'fishpond');
 }
@@ -56,6 +84,8 @@ export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
 
   const hasMust = batch.some((m) => m.must);
   const hasTier2 = batch.some((m) => m.nameTier === 2);
+  // 认人名册：规则区之后、便签之前（名册变更频率周级 < 便签每轮变——稳定前缀最大化）
+  const roster = renderRoster(chatKey, personaDir);
   // S3.1/S3.3 便签注入：拼在消息段之前、任务指令之后（persona 前缀保持固定吃缓存，
   // 会变的便签放后面）；便签自身带边界标记，与消息段的不可信声明分开
   const notes = chatKey ? renderNotes(chatKey) : '';
@@ -77,6 +107,12 @@ export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
     '- 附件图片按从新到旧排列：第一张是刚收到的（对应消息里的图片标记），后面的才是几分钟前的旧图（讨论复核用）——看清楚再答，别把新图和旧图串台',
     hasMust ? '- 有人在直接叫你（@或喊名）：即使没什么可说的，也至少简短回应一声' : '',
     hasTier2 && !hasMust ? '- 消息里提到了你的名字但不确定是在叫你：想接就接，不想接就 [SILENT]，不用勉强' : '',
+    roster ? [
+      '',
+      '【这个群的常客（认人名册）】',
+      roster,
+      '- 名册只用来认人——别在群里复述或议论这些资料（谁活跃、谁干过什么不出口）',
+    ].join('\n') : '',
     notes,
     emojiText ? [
       '',
