@@ -96,6 +96,11 @@ try {
   ok(toPlaceholders(orig, vals) === 'Read <fishpond目录>/memory/x.json 对主人（<你的QQ号>）@<鱼QQ号>', 'P9c to 反向净化');
   ok(toPlaceholders('无值的 D:/other/path', vals) === '无值的 D:/other/path', 'P9d to 不认识的路径不动');
   ok(fillPlaceholders(toPlaceholders(orig, vals), vals) === orig, 'P9e round-trip 往返无损');
+
+  // P10 空批次守卫（D6 修审计 P1）：全批消息都不含边界标记段时注入警告（不再对着空气调模型）
+  const p10 = buildPrompt({}, [mkMsg('这不是边界标记段，只是普通文本')], { personaDir: dir });
+  ok(p10.includes('没有解析出任何消息段') && p10.includes('[SILENT]'), 'P10a 空批次注入警告段+指示 [SILENT]', p10.slice(-140));
+  ok(!p10.includes('<group_message'), 'P10b 无消息段混入');
 } finally {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败无妨（临时目录） */ }
 }

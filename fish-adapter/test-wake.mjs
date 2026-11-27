@@ -181,6 +181,37 @@ const baseCfg = {
   ok(lines.every((l) => l.batchId && l.chatKey), 'W12c 每行带 batchId/chatKey（D8）');
 }
 
+// —— W14-W16 协议漂移面（D6：fake 补齐 attachments 回执/思考帧/备选 sessionId 后锁定）——
+{
+  const client = createAppServerClient(baseCfg);
+  // W14 attachments 通路：附件从 wakeOnce 一路序列化进 session/send 帧——fake 回执里见真章
+  const r14 = await client.wakeOnce('FAKE:ATT', { attachments: [
+    { kind: 'image', localPath: 'D:/x/a.jpg', filename: 'a.jpg', mimeType: 'image/jpeg' },
+    { kind: 'image', localPath: 'D:/x/b.png', filename: 'b.png', mimeType: 'image/png' },
+  ] });
+  ok(/OK/.test(r14.content) && r14.content.includes('[att:a.jpg|b.png]'), 'W14 attachments 通路：回执含两个文件名', JSON.stringify(r14.content));
+  const r14b = await client.wakeOnce('FAKE:ATT', {});
+  ok(r14b.content.includes('[att:none]'), 'W14b 无附件时回执 none（字段可缺省）', r14b.content);
+  // W15 thinking 帧：reasoning_delta（协议实测命名）→ thinking 采集
+  const r15 = await client.wakeOnce('FAKE:THINK', {});
+  ok(r15.thinking === '思考内容' && r15.content === 'OK', 'W15 reasoning_delta 思考帧采集', JSON.stringify(r15).slice(0, 120));
+  // W16 备选 sessionId 形状（payload.sessionId）：串线过滤兼容两种帧形态
+  const r16 = await client.wakeOnce('FAKE:ALT-SID', {});
+  ok(r16.content === 'OK', 'W16 payload.sessionId 备选形状不误杀', JSON.stringify(r16).slice(0, 100));
+  client.stop();
+}
+
+// —— W17 counters 损坏 fail-closed（审计"兜底债"核心路径：损坏 = 按已达上限保守拦截，当日哑）——
+{
+  writeFileSync(COUNTERS, '{bad json');
+  const cfg = { ...baseCfg, patrol: { ...baseCfg.patrol, maxDailyWakes: 5 } };
+  const client = createAppServerClient(cfg);
+  const safe = createWakeSafe(cfg, client);
+  const r = await safe.wakeSafe('g:corrupt', 'FAKE:OK', { batchId: 'corrupt1', msgs: 1 });
+  ok(r.skipped === true && /limit-daily-wakes/.test(String(r.reason)), 'W17 counters 损坏被保守拦截（fail-closed 当日哑）', JSON.stringify(r).slice(0, 100));
+  client.stop();
+}
+
 // —— 恢复生产 counters ——
 if (hadCounters) copyFileSync(BAK, COUNTERS);
 else try { rmSync(COUNTERS); } catch { /* 本来就没有 */ }
