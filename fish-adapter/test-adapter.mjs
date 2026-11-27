@@ -5,7 +5,7 @@
 // 跑法：node test-adapter.mjs，退出码 0 = 全过
 import { STATE_ROOT } from './test-setup.mjs';
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,8 +84,51 @@ const spawnAdapter = (cfg) => {
     const r4 = await fetch(`http://127.0.0.1:${PORT}/outbound/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const j4 = await r4.json().catch(() => ({}));
     ok(r4.status === 403 && j4.code === 'E_TOKEN', 'AD4 /outbound/test 无 token 拒绝（403 E_TOKEN）', `${r4.status} ${JSON.stringify(j4).slice(0, 60)}`);
+    // /chat-test 鉴权闸（试聊台）：无 token → 403；webhook 模式带 token → 409 E_NO_PATROL
+    const r5 = await fetch(`http://127.0.0.1:${PORT}/chat-test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"message":"hi"}' });
+    const j5 = await r5.json().catch(() => ({}));
+    ok(r5.status === 403 && j5.code === 'E_TOKEN', 'AD5 /chat-test 无 token 拒绝（403 E_TOKEN）', `${r5.status}`);
+    const r5b = await fetch(`http://127.0.0.1:${PORT}/chat-test`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-console-token': 'console-tok' }, body: '{"message":"hi"}' });
+    const j5b = await r5b.json().catch(() => ({}));
+    ok(r5b.status === 409 && j5b.code === 'E_NO_PATROL', 'AD5b webhook 模式（无巡逻链路）→ 409 E_NO_PATROL', `${r5b.status} ${JSON.stringify(j5b).slice(0, 80)}`);
   }
   p.kill();
+  await sleep(200);
+}
+
+// —— AD6 试聊台正常往返（patrol+fake 实例：3298 端口）+ 正式状态隔离断言 ——
+{
+  const PORT2 = 3298;
+  const cfg6 = {
+    ...mkCfg(),
+    listen: { port: PORT2 },
+    patrol: { enabled: true, cliPath: join(HERE, 'wake', 'fake-app-server.mjs'), batchWindowMs: 100, mustWindowMs: 50, minWakeIntervalMs: 0, maxDailyWakes: 1000, model: { providerId: 'fake', modelId: 'fake-model' }, silentHours: null, wakeTimeoutMs: 30_000 },
+  };
+  delete cfg6.bridge; // patrol 模式（bridge.mode 不设也行——file 模式留档即可）
+  writeFileSync(join(STATE_ROOT, 'config.json'), JSON.stringify(cfg6, null, 1));
+  // persona 目录：fake 协议下 buildTestPrompt 读 personaDir（fishpondDir 回退包根 fishpond——测试环境无 → 降级空串不炸）
+  const p6 = spawnAdapter();
+  await (async () => {
+    for (let i = 0; i < 33; i++) {
+      try { const r = await fetch(`http://127.0.0.1:${PORT2}/health`, { signal: AbortSignal.timeout(500) }); if (r.ok) return true; } catch { /* 未起 */ }
+      await sleep(300);
+    }
+    return false;
+  })();
+  const wakeBefore = existsSync(join(STATE_ROOT, 'logs', 'wake.jsonl')) ? readFileSync(join(STATE_ROOT, 'logs', 'wake.jsonl'), 'utf8').split('\n').filter(Boolean).length : 0;
+  const r6 = await fetch(`http://127.0.0.1:${PORT2}/chat-test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-console-token': 'console-tok' },
+    body: JSON.stringify({ history: [{ role: 'user', text: '在吗' }], message: 'FAKE:OK' }),
+  });
+  const j6 = await r6.json().catch(() => ({}));
+  ok(r6.status === 200 && j6.ok === true && j6.reply === 'OK' && j6.usage?.inputTokens === 1, 'AD6a 试聊往返：fake 模型回 OK+usage', `${r6.status} ${JSON.stringify(j6).slice(0, 100)}`);
+  ok(j6.modelMs != null && j6.modelMs >= 0, 'AD6b 返回 modelMs');
+  const wakeAfter = existsSync(join(STATE_ROOT, 'logs', 'wake.jsonl')) ? readFileSync(join(STATE_ROOT, 'logs', 'wake.jsonl'), 'utf8').split('\n').filter(Boolean).length : 0;
+  ok(wakeAfter === wakeBefore, 'AD6c 隔离：试聊不写正式 wake.jsonl（绕过 safe 账本）', `before=${wakeBefore} after=${wakeAfter}`);
+  const ctLog = existsSync(join(STATE_ROOT, 'logs', 'chat-test.jsonl')) ? readFileSync(join(STATE_ROOT, 'logs', 'chat-test.jsonl'), 'utf8').trim().split('\n').length : 0;
+  ok(ctLog >= 1, 'AD6d 独立留痕 chat-test.jsonl 有记录', `lines=${ctLog}`);
+  p6.kill();
   await sleep(200);
 }
 

@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { existsSync, appendFileSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { hotJson, loadConfig, log } from './lib/util.mjs';
+import { hotJson, loadConfig, log, ROOT_DIR } from './lib/util.mjs';
 import { OneBotClient } from './lib/onebot.mjs';
 import { createInbound, dedupHas } from './lib/inbound.mjs';
 import { createOutbound } from './lib/outbound.mjs';
@@ -14,7 +14,7 @@ import { createPeers } from './lib/peer.mjs';
 import { poolExtrasFor, sortByNewest } from './lib/imgpool.mjs';
 import { createAppServerClient, DENY_ALL } from './wake/app-server.mjs';
 import { createWakeSafe } from './wake/safe.mjs';
-import { buildPrompt, fishpondDir, TOOL_AUDIT_PROMPT } from './wake/prompt.mjs';
+import { buildPrompt, buildTestPrompt, fishpondDir, TOOL_AUDIT_PROMPT } from './wake/prompt.mjs';
 import { noteNameOutcome } from './lib/name-tier.mjs';
 import { appendNote } from './lib/sticky.mjs';
 import { startOutboxPolling, ensureBridgeDirs, sweepInboxArchive, sweepEmojiTrash } from './lib/bridge.mjs';
@@ -319,6 +319,55 @@ const server = createServer((req, res) => {
           segments: result.segments ?? null,
           emoji: result.emoji ?? null,
         }));
+        return;
+      }
+      // —— 试聊台（2026-11-27，借鉴 MaiBot internal-chat：控制台网页直聊，人格调试用）——
+      // 鉴权同 /outbound/test；直调 wakeClient.wakeOnce（绕过 safe 的 FIFO/限额——toolSelfCheck
+      // probe 同款模式）。**完全隔离正式状态**：不进 chat.jsonl/wake.jsonl/便签/speak/限额，
+      // 不走出站（无审计/OS 剥除——返回模型原始输出，调试要看真行为）；留痕走独立
+      // logs/chat-test.jsonl（与正式 wake.jsonl 分账，成本核算不混）。与生产唤醒并发靠
+      // sessionId 事件过滤隔离（app-server 既有机制）
+      if (req.method === 'POST' && req.url === '/chat-test') {
+        const token = String(req.headers['x-console-token'] ?? '');
+        if (!cfg.console?.token || token !== cfg.console.token) {
+          log('http', 'rejected /chat-test: bad/missing x-console-token');
+          res.writeHead(403, { 'Content-Type': 'application/json' }).end('{"ok":false,"code":"E_TOKEN"}');
+          return;
+        }
+        if (!wakeClient) {
+          res.writeHead(409, { 'Content-Type': 'application/json' }).end('{"ok":false,"code":"E_NO_PATROL","message":"试聊台需要巡逻链路（patrol.enabled）——webhook 模式下不可用"}');
+          return;
+        }
+        let ctBody;
+        try { ctBody = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
+        catch { res.writeHead(400).end('bad json'); return; }
+        const message = typeof ctBody.message === 'string' ? ctBody.message : '';
+        if (!message.trim() || message.length > 500) {
+          res.writeHead(400, { 'Content-Type': 'application/json' }).end('{"ok":false,"code":"E_BAD_PARAM","field":"message"}');
+          return;
+        }
+        const history = Array.isArray(ctBody.history) ? ctBody.history : [];
+        if (history.length > 40 || history.some((h) => !h || typeof h.text !== 'string' || h.text.length > 500)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' }).end('{"ok":false,"code":"E_BAD_PARAM","field":"history"}');
+          return;
+        }
+        const prompt = buildTestPrompt(cfg, history, message, { personaDir: fishpondDir(cfg, PKG_ROOT) });
+        const t0 = Date.now();
+        try {
+          const r = await wakeClient.wakeOnce(prompt, { timeoutMs: 90_000 });
+          const modelMs = Date.now() - t0;
+          try {
+            appendFileSync(join(ROOT_DIR, 'logs', 'chat-test.jsonl'), JSON.stringify({
+              ts: new Date().toISOString(), message: message.slice(0, 200), reply: String(r.content ?? '').slice(0, 300), usage: r.usage ?? null,
+            }) + '\n', 'utf8');
+          } catch { /* 留痕失败不阻断试聊 */ }
+          log('chat-test', `reply (${modelMs}ms) in=${r.usage?.inputTokens ?? '?'}tok out=${r.usage?.outputTokens ?? '?'}tok msg="${message.slice(0, 30)}"`);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: true, reply: String(r.content ?? ''), thinking: r.thinking ?? null, usage: r.usage ?? null, modelMs }));
+        } catch (e) {
+          log('chat-test', `failed: ${e.message}`);
+          res.writeHead(502, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: false, code: 'E_WAKE', message: String(e.message ?? e).slice(0, 160) }));
+        }
         return;
       }
       if (req.method === 'POST' && /^\/zcode(\?|$)/.test(req.url ?? '')) {

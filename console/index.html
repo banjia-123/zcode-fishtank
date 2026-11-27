@@ -36,6 +36,7 @@
     <div class="nav-sep"></div>
     <div class="nav-item" data-page="config">配置</div>
     <div class="nav-item" data-page="send">测试发送</div>
+    <div class="nav-item" data-page="chattest">试聊台</div>
     <div class="nav-item" data-page="emoji">表情包</div>
     <div class="nav-item" data-page="ops">运维</div>
     <div class="nav-item" data-page="automations">自动化任务</div>
@@ -257,6 +258,29 @@
             <button class="btn primary" id="send-go" disabled>② 真发送（计入额度）</button>
           </div></div>
           <div id="send-result"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 试聊台（2026-11-27，人格调试用） ================= -->
+    <section class="page hidden" id="page-chattest">
+      <div class="page-head">
+        <div>
+          <h1>试聊台</h1>
+          <div class="sub">直接和鱼对话——不进聊天记录 / 不占额度 / 不发出站；返回原始输出（含思考过程），改完 persona 立即试效果</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn ghost" id="chattest-clear">清空对话</button>
+        </div>
+      </div>
+      <div class="card" id="chattest-card">
+        <div class="card-body" id="chattest-body">
+          <div class="chatlog" id="chattest-log"></div>
+          <div class="frow"><div class="flabel">消息</div><div><textarea id="chattest-text" maxlength="500" placeholder="想对她说什么就写什么（Ctrl+Enter 发送）"></textarea></div></div>
+          <div class="frow"><div class="flabel"></div><div>
+            <button class="btn primary" id="chattest-go">发送</button>
+            <span class="sub" id="chattest-hint">每轮都真调模型（按量计费），但不计入鱼的正式额度</span>
+          </div></div>
         </div>
       </div>
     </section>

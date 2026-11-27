@@ -420,6 +420,28 @@ async function apiSendProxy(body, dryRun) {
   return { dryRun, ...r.body };
 }
 
+// POST /api/chat-test：试聊台代理（2026-11-27，借鉴 MaiBot internal-chat——人格调试用，
+// 适配器侧完全隔离正式状态：不进聊天记录/额度/便签，返回模型原始输出含思考过程）。
+// 超时 120s（thinking 模型出得慢，前端同款放宽）
+async function apiChatTest(body) {
+  const message = typeof body.message === 'string' ? body.message : '';
+  if (!message.trim() || message.length > 500) throw httpErr(400, 'E_BAD_PARAM', 'message 必填，1~500 字');
+  const history = Array.isArray(body.history) ? body.history : [];
+  if (history.length > 40 || history.some((h) => !h || typeof h.text !== 'string' || h.text.length > 500)) {
+    throw httpErr(400, 'E_BAD_PARAM', 'history 最多 40 条、每条 ≤500 字');
+  }
+  const st = await fetchAdapter('/stats', 2000);
+  if (!(st && st.status === 200 && st.body?.ok)) throw httpErr(502, 'E_ADAPTER_DOWN', '适配器离线——试聊台不可用');
+  const r = await fetchAdapterPost('/chat-test', { history, message }, 120_000);
+  if (!r) throw httpErr(502, 'E_ADAPTER_DOWN', '适配器 /chat-test 无响应（模型出得慢？等一会再试）');
+  // 适配器的结构化拒绝（403 token / 400 参数 / 409 无巡逻 / 502 wake 失败）原样透传
+  if (typeof r.body === 'object' && r.body !== null && r.body.ok === false) {
+    throw httpErr(r.status === 403 ? 403 : 502, r.body.code ?? 'E_ADAPTER', String(r.body.message ?? '试聊被适配器拒绝'));
+  }
+  if (r.status !== 200) throw httpErr(502, 'E_ADAPTER_DOWN', '适配器 /chat-test 异常响应');
+  return r.body;
+}
+
 // GET /api/send/sessions：白名单会话（脱敏展示，值为完整 key）
 function apiSendSessions() {
   let cfg = {};
@@ -1818,6 +1840,7 @@ const server = createServer((req, res) => {
         if (url === '/api/send/sessions' && req.method === 'GET') return route(() => apiSendSessions());
         if (url === '/api/send/preview' && req.method === 'POST') return route(() => readBody().then((b) => apiSendProxy(b, true)));
         if (url === '/api/send' && req.method === 'POST') return route(() => readBody().then((b) => apiSendProxy(b, false)));
+        if (url === '/api/chat-test' && req.method === 'POST') return route(() => readBody().then(apiChatTest));
         if (url === '/api/emoji/gate' && req.method === 'GET') return route(() => { const g = (JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).emojiGate ?? {}); return { emoji: { enabled: g.enabled !== false, window: g.window ?? 5, max: g.max ?? 2 } }; });
         if (url === '/api/emoji/gate' && req.method === 'POST') return route(() => readBody().then(apiEmojiGate));
         if (url === '/api/emoji' && req.method === 'GET') return route(() => apiEmojiList(u.searchParams));

@@ -350,3 +350,15 @@ select:focus,.date-input:focus{border-color:#3a7f78}
 .gate-line .btn{font-size:11px;padding:4px 10px}
 .gate-line input{width:46px;background:var(--panel-2);border:1px solid var(--line-2);border-radius:4px;color:var(--text);font-size:12px;padding:3px 6px;text-align:center;outline:none}
 .gate-line input:focus{border-color:#3a7f78}
+
+/* ── 试聊台（2026-11-27）：对话气泡 + 思考折叠 + 用量行 ── */
+.chatlog{display:flex;flex-direction:column;gap:10px;max-height:52vh;overflow-y:auto;padding:4px 2px 8px;margin-bottom:10px;border-bottom:1px solid var(--line)}
+.ct-row{max-width:78%;padding:8px 12px;border-radius:10px;font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.ct-user{align-self:flex-end;background:rgba(72,189,178,.12);border:1px solid rgba(72,189,178,.25)}
+.ct-fish{align-self:flex-start;background:var(--panel-2);border:1px solid var(--line-2)}
+.ct-text{margin:0}
+.ct-silent{color:#8a959c;font-style:italic}
+.ct-think{margin:0 0 6px;font-size:11px;color:#8a959c}
+.ct-think summary{cursor:pointer;user-select:none}
+.ct-think div{margin-top:4px;padding:6px 8px;background:rgba(0,0,0,.03);border-radius:5px;max-height:160px;overflow-y:auto}
+.ct-meta{margin-top:5px;font-size:10px;color:#9aa5ab;text-align:right}

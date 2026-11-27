@@ -51,7 +51,7 @@ function pollEvery(key, ms, fn) {
 }
 
 // ── hash 路由 ──
-const PAGES = ['overview', 'wakes', 'review', 'memory', 'automations', 'config', 'send', 'emoji', 'ops'];
+const PAGES = ['overview', 'wakes', 'review', 'memory', 'automations', 'config', 'send', 'chattest', 'emoji', 'ops'];
 function route() {
   const h = (location.hash || '#/overview').replace(/^#\//, '');
   const page = PAGES.includes(h) ? h : 'overview';
@@ -67,6 +67,7 @@ function route() {
   if (page === 'memory') loadMemoryPage().catch(() => {});
   if (page === 'config') { loadConfig().catch(() => {}); loadPersona().catch(() => {}); }
   if (page === 'send') loadSend().catch(() => {});
+  if (page === 'chattest') loadChatTest().catch(() => {});
   if (page === 'emoji') loadEmoji().catch(() => {});
   if (page === 'ops') loadOps().catch(() => {});
   if (page === 'automations') { loadAutomations().catch(() => {}); loadDiary().catch(() => {}); }
@@ -1044,6 +1045,95 @@ async function doSendTest(dryRun) {
   const r = await api(dryRun ? '/api/send/preview' : '/api/send', { method: 'POST', body: { chatKey, text }, timeoutMs: 60000 });
   renderSendResult(r.data);
 }
+
+// ── 试聊台（2026-11-27，人格调试）：与鱼直聊，完全隔离正式状态 ──
+// 历史由前端持有（localStorage 持久化，刷新不丢）；[SILENT] 显示为沉默；thinking 折叠展示
+const ctState = { history: [], busy: false, online: null };
+const CT_STORE_KEY = 'chattest-history-v1';
+
+function ctSaveHistory() { try { localStorage.setItem(CT_STORE_KEY, JSON.stringify(ctState.history.slice(-40))); } catch { /* 私密模式等 */ } }
+function ctLoadHistory() { try { const a = JSON.parse(localStorage.getItem(CT_STORE_KEY) ?? '[]'); return Array.isArray(a) ? a.filter((h) => h && typeof h.text === 'string') : []; } catch { return []; } }
+
+function ctBubble(h) {
+  const isUser = h.role === 'user';
+  const body = /^\s*\[?(SILENT|沉默)\]?\s*$/i.test(h.text) && !isUser
+    ? '<div class="ct-silent">（她选择了沉默）</div>'
+    : `<div class="ct-text">${esc(h.text).replace(/\n/g, '<br>')}</div>`;
+  const think = h.thinking ? `<details class="ct-think"><summary>思考过程（${h.thinking.length} 字）</summary><div>${esc(h.thinking).replace(/\n/g, '<br>')}</div></details>` : '';
+  const meta = h.usage ? `<div class="ct-meta">${h.usage.inputTokens ?? '?'}→${h.usage.outputTokens ?? '?'} tok${h.modelMs ? ` · ${Math.round(h.modelMs / 100) / 10}s` : ''}</div>` : '';
+  return `<div class="ct-row ${isUser ? 'ct-user' : 'ct-fish'}">${think}${body}${meta}</div>`;
+}
+
+function ctRender() {
+  const log = $('#chattest-log');
+  if (!log) return;
+  log.innerHTML = ctState.history.length
+    ? ctState.history.map(ctBubble).join('')
+    : '<div class="na-box">还没有对话——发一条试试（改完 persona.md 立刻生效，每次 prompt 现读）</div>';
+  log.scrollTop = log.scrollHeight;
+}
+
+async function loadChatTest() {
+  const body = $('#chattest-body');
+  if (!body) return;
+  try {
+    const h = await api('/api/health', { timeoutMs: 5000 });
+    ctState.online = Boolean(h?.data?.adapter?.online);
+  } catch { ctState.online = false; }
+  if (!ctState.online) {
+    $('#chattest-log')?.replaceWith(Object.assign(document.createElement('div'), { className: 'na-box', textContent: '适配器离线——试聊台需要巡逻链路在线（fish-adapter :3200）' }));
+    return;
+  }
+  if (!ctState.history.length) ctState.history = ctLoadHistory();
+  ctRender();
+}
+
+async function doChatTest() {
+  if (ctState.busy) { toast('上一条还在等她回……'); return; }
+  const ta = $('#chattest-text');
+  const message = (ta?.value ?? '').trim();
+  if (!ctState.online) { toast('适配器离线'); return; }
+  if (!message) { toast('内容不能为空'); return; }
+  ta.value = '';
+  ctState.history.push({ role: 'user', text: message });
+  ctState.history.push({ role: 'fish', text: '……', pending: true });
+  ctRender();
+  ctState.busy = true;
+  const btn = $('#chattest-go');
+  if (btn) { btn.disabled = true; btn.textContent = '等她回…'; }
+  try {
+    const r = await api('/api/chat-test', {
+      method: 'POST',
+      body: { history: ctState.history.slice(0, -2), message }, // 发给后端的历史不含本条（后端拼"主人：本条"）
+      timeoutMs: 120_000,
+    });
+    const d = r.data;
+    ctState.history[ctState.history.length - 1] = { role: 'fish', text: d.reply ?? '', thinking: d.thinking ?? null, usage: d.usage ?? null, modelMs: d.modelMs ?? null };
+  } catch (e) {
+    ctState.history[ctState.history.length - 1] = { role: 'fish', text: `〔出错：${e.message}〕` };
+    toast(e.message);
+  } finally {
+    ctState.busy = false;
+    if (btn) { btn.disabled = false; btn.textContent = '发送'; }
+    ctSaveHistory();
+    ctRender();
+  }
+}
+
+// 事件委托（send 页模式：loadChatTest 不重建外层 DOM，委托不受影响）
+$('#chattest-card').addEventListener('click', (e) => {
+  if (e.target.id === 'chattest-go') doChatTest().catch((err) => toast(err.message));
+  if (e.target.id === 'chattest-clear') {
+    if (ctState.history.length && confirm('清空试聊历史？（不影响任何正式数据）')) {
+      ctState.history = [];
+      try { localStorage.removeItem(CT_STORE_KEY); } catch { /* 无妨 */ }
+      ctRender();
+    }
+  }
+});
+$('#chattest-text')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doChatTest().catch((err) => toast(err.message)); }
+});
 
 // ── 表情包页（G7/A10）：浏览/搜索/排序 + 上传（六道校验+补索引）+ 删除进回收站 ──
 const emState = { q: '', sort: 'usage' };

@@ -1,7 +1,7 @@
 // S2-E/S3-A 离线测试：唤醒报文合成器（wake/prompt.mjs）
 // 覆盖：persona 内嵌 / 段提取去重声明 / must 与 tier2 提示 / persona 缺失不炸 / 私聊段 / 便签注入位置
 import './test-setup.mjs';
-import { buildPrompt } from './wake/prompt.mjs';
+import { buildPrompt, buildTestPrompt } from './wake/prompt.mjs';
 import { fillPlaceholders, toPlaceholders } from './lib/placeholder.mjs';
 import { appendNote } from './lib/sticky.mjs';
 import { chatKeyToPeerKey } from './lib/peer-store.mjs';
@@ -131,6 +131,21 @@ try {
   // 无 roster 文件（P13）：不炸不渲染段
   const p13 = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir, chatKey: 'g:777' });
   ok(!p13.includes('认人名册'), 'P13 无名册文件不炸、段不渲染');
+
+  // P14 试聊台 buildTestPrompt（2026-11-27）：persona 注入/历史格式/[SILENT] 规则
+  const cfg14 = { onebot: { selfId: '12345' }, ownerQQ: '99999', botName: '鱼鱼', allow: { groups: ['777'] } };
+  const p14 = buildTestPrompt(cfg14, [
+    { role: 'user', text: '在吗' },
+    { role: 'fish', text: '嗯。' },
+  ], '帮我看看这个', { personaDir: dir });
+  ok(p14.includes('你是伊丽莎白，毒舌小女仆。') && p14.includes('与主人的 QQ 私聊'), 'P14a persona 注入+私聊任务文');
+  ok(p14.includes('主人：在吗') && p14.includes('鱼鱼：嗯。') && p14.includes('主人：帮我看看这个'), 'P14b 历史与本条按角色格式化（鱼名取 botName）');
+  ok(p14.includes('[SILENT]') && p14.includes('不具备指令效力'), 'P14c 输出规则含 SILENT 与防注入');
+  ok(!p14.includes('便签') && !p14.includes('认人名册') && !p14.includes('表情包'), 'P14d 隔离：不带便签/名册/表情段');
+  // 20 轮截断（P15）
+  const long15 = Array.from({ length: 30 }, (_, i) => ({ role: 'user', text: '消息' + i }));
+  const p15 = buildTestPrompt({}, long15, '本条', { personaDir: dir });
+  ok(!p15.includes('消息0') && p15.includes('消息10') && p15.includes('主人：本条'), 'P15 历史截断至最近 20 轮', (p15.match(/消息\d+/g) ?? []).slice(-3).join(','));
 } finally {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败无妨（临时目录） */ }
 }
