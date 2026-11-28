@@ -22,7 +22,10 @@ const EMOJI_SHORT = /\[([^\[\]]{1,40}\.(?:jpe?g|png|gif|webp))\]/gi;
 // 全角括号（叼猎物.png）（2026-11-28 第三次漂移实测：群内全角括号文化（）强势，她连发三条把图名写进
 // 全角括号当"发图"，字面漏出站——选图没错（索引描述与语境吻合），发送形态错）。处置对齐简写漂移：
 // 库里存在才转图，不存在保留字面；半角圆括号不收（英文正文括号注释常见，误伤面大）
-const EMOJI_SHORT_FULL = /（([^（）]{1,40}\.(?:jpe?g|png|gif|webp))）/g;
+// 2026-11-28 二轮实战：主修复生效（完整形态转图+冷却首拦）后漂移变异出半开形态（欸嘿嘿.jpg——漏闭
+// 括号，两条字面漏出站）。正则放宽为"开括号+图名"即可，前瞻要求图名后紧跟闭括号/空白/行尾/中文标点
+// （防"（xx.jpg 的梗）"这类括号内引用被误转——图名后紧跟非空白才保留）；剥除时完整括号优先，半开退而剥
+const EMOJI_SHORT_FULL = /（([^（）]{1,40}\.(?:jpe?g|png|gif|webp))(?=）|[\n\r]|$|[，。！？；、])/g;
 
 // 表情文件名 → 库内绝对路径；不合法/不存在返回 null（降级纯文本）
 function resolveEmojiFile(cfg, name) {
@@ -54,7 +57,7 @@ function stripEmojiMarks(rawText, cfg, chatKey) {
   for (const m of [...text.matchAll(EMOJI_SHORT_FULL)]) {
     if (resolveEmojiFile(cfg, m[1])) {
       log('outbound', `emoji fullwidth-paren accepted: "${m[1].slice(0, 60)}"（全角括号漂移，按表情发）`);
-      text = text.replace(m[0], '');
+      text = text.replace(m[0] + '）', '').replace(m[0], ''); // 完整括号优先剥；半开形态只剥开括号段
     }
   }
   return text.trim();

@@ -369,6 +369,25 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   ok(rF4.action === 'sent' && !hasImg(bF4), 'FR4 全角转图进冷却体系：600s 内同图被拦（FR1 已发过独处.png）');
   ok(!textOf(bF4).includes('独处.png'), 'FR4b 被拦后字面也剥除', textOf(bF4).slice(-80));
 
+  // FR5（2026-11-28 二轮实战变异）：半开形态（独处.png——漏闭括号，字面漏出站两条）→ 也转图
+  const bF5 = calls.length;
+  const rF5 = await outbound.processMessage({ lines: ['半开也认。（独处.png'] }, meta('931', 'fr5.json'));
+  ok(rF5.action === 'sent' && hasImg(bF5), 'FR5 半开形态（漏闭括号）行尾转图', JSON.stringify(rF5));
+  ok(!textOf(bF5).includes('独处.png'), 'FR5b 半开字面剥除', textOf(bF5).slice(-80));
+
+  // FR6：半开形态段中（图名后是换行）→ 转图且后续正文完整（换群 g:932：避开 FR5 刚写的 g:931 同图冷却）
+  const bF6 = calls.length;
+  const rF6 = await outbound.processMessage({ lines: ['照这进度攒不够。（独处.png\n\n不过梦想还是要有的。'] }, meta('932', 'fr6.json'));
+  ok(rF6.action === 'sent' && hasImg(bF6), 'FR6 半开形态段中转图', JSON.stringify(rF6));
+  const f6text = textOf(bF6);
+  ok(f6text.includes('照这进度攒不够。') && f6text.includes('不过梦想还是要有的。') && !f6text.includes('独处.png'), 'FR6b 剥除后前后正文完整无残字', f6text.slice(-80));
+
+  // FR7：括号内引用保护（图名后跟普通空格继续写内容 → 非发图形态，保留字面不转图）
+  const bF7 = calls.length;
+  const rF7 = await outbound.processMessage({ lines: [' referencing （独处.png 的梗）挺好笑'] }, meta('931', 'fr7.json'));
+  ok(rF7.action === 'sent' && !hasImg(bF7), 'FR7 括号内引用（图名后跟空格续写）不转图');
+  ok(textOf(bF7).includes('（独处.png 的梗）'), 'FR7b 引用形态字面保留', textOf(bF7).slice(-80));
+
   unlinkSync(join(STATE_ROOT, 'config.json')); // 还原默认
 }
 
