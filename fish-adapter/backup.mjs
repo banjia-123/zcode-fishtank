@@ -40,7 +40,8 @@ const COLLECT = [
   { dir: join(FISHPOND, 'diary'), rel: 'fishpond/diary' },         // 每日日记
   { dir: join(FISHPOND, 'emojis'), rel: 'fishpond/emojis' },       // 表情库 + index.json（体积大头 7.7M）
   { dir: join(FISHPOND, 'logs'), rel: 'fishpond/logs' },           // chat.jsonl 聊天史 / speak.jsonl 冷却+统计源
-  { dir: join(FISHPOND, 'state'), rel: 'fishpond/state' },         // peers 便签（首建前不存在，按存在收集）
+  { dir: join(FISHPOND, 'state'), rel: 'fishpond/state' },         // 占位（便签真身在适配器 state，见下条；此目录至今不存在，按存在收集）
+  { dir: join(WORKSPACE, 'fish-adapter', 'state', 'peers'), rel: 'fish-adapter/state/peers' }, // 便签+退避状态真身（S2.6/S3.1，2026-11-28 审视补收）——只收 peers 子目录：state 根下有 config*.bak 密钥副本，绝不收
   { dir: join(FISHPOND, 'automation'), rel: 'fishpond/automation' },
   { files: ['persona.md', '.learner-prompt.md', '.diary-prompt.md'], base: FISHPOND, rel: 'fishpond' },
   { files: ['wake.jsonl', 'audit.log', 'sessions.jsonl', 'diary-deleted.jsonl', 'chat-test.jsonl'], base: join(ROOT_DIR, 'logs'), rel: 'fish-adapter/logs' },

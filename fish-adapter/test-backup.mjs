@@ -43,6 +43,8 @@ w('fish-adapter/logs/wake.jsonl', '账本');
 w('fish-adapter/logs/adapter.log', '大日志'); // 排除对象
 w('fish-adapter/config.json', '{"token":"secret"}'); // 排除对象（密钥裁决）
 w('fish-adapter/backups/config-1.json', '{"token":"secret"}'); // 排除对象（密钥副本）
+w('fish-adapter/state/peers/g1.json', '{"recent":[]}'); // 便签真身（2026-11-28 审视补收）
+w('fish-adapter/state/config-before-x.bak', '{"token":"secret"}'); // 排除对象（state 根有密钥副本）
 
 const run = (args) => spawnSync(process.execPath, [SCRIPT, ...args], {
   encoding: 'utf8', timeout: 60_000,
@@ -135,6 +137,13 @@ try {
   const r10b = run(['--run', '--json']);
   const j10b = jsonOf(r10b.stdout);
   ok(r10b.status === 0 && j10b?.ok === true && !existsSync(join(dest, '.backup.lock')), 'B10b 60s+ stale 锁强制清后照常跑（释放干净）', r10b.stdout.slice(0, 120));
+
+  // B11 便签真身（2026-11-28 审视补收）：state/peers 入库，state 根的密钥副本绝不入
+  const r11 = run(['--run', '--json']);
+  const j11 = jsonOf(r11.stdout);
+  ok(r11.status === 0 && j11?.ok === true, 'B11 --run 正常', r11.stdout.slice(0, 120));
+  ok(existsSync(join(j11.snapshot, 'fish-adapter/state/peers/g1.json')), 'B11a fish-adapter/state/peers（便签真身）入库');
+  ok(!existsSync(join(j11.snapshot, 'fish-adapter/state/config-before-x.bak')), 'B11b state 根的 config*.bak（密钥副本）不入库');
 } finally {
   try { rmSync(ws, { recursive: true, force: true }); } catch { /* 临时目录 */ }
   try { rmSync(dest, { recursive: true, force: true }); } catch { /* 临时目录 */ }
