@@ -1578,6 +1578,21 @@ async function loadAutomations() {
   const dm = $('#am-diary-model'); if (dm) dm.textContent = `生效模型：${fmtModel(d.models?.diary)} · 配置页「脑子（模型）」可改 · 产物落在下方日记列表`;
 }
 
+// 任务书外写入报告（2026-11-28，后端 task-guard.mjs）：任务动了任务书没让它动的文件时，状态行下面亮一行
+function strayHtml(s) {
+  if (!s || s.checkError) return s?.checkError ? `<div class="send-meta" style="color:#e07b7b">⚠ 越界检查失败：${esc(s.checkError)}</div>` : '';
+  // 文件名由模型决定，一律过 esc——不能让任务写出的文件名把标签带进管理面板
+  const failed = s.quarantineFailed ?? [];
+  const parts = [
+    ...failed.map((x) => `${esc(x.rel)}（隔离失败：${esc(x.error)}）`),
+    ...(s.modified ?? []).map((x) => `${esc(x)}（被改动，请检查）`),
+    ...(s.removed ?? []).map((x) => `${esc(x)}（被删除）`),
+    ...(s.added ?? []).filter((x) => !failed.some((f) => f.rel === x)).map((x) => `${esc(x)}（已隔离）`),
+  ];
+  if (!parts.length) return '';
+  return `<div style="font-size:11px;color:#e07b7b;margin-top:4px">⚠ 任务动了任务书之外的文件：${parts.join('、')}${s.concurrent ? '（另一任务同时在跑，可能是它写的）' : ''}</div>`;
+}
+
 function runStatusText(run, kind) {
   if (!run || run.status === 'error' && !run.error && !run.finishedAt) return '<span style="color:var(--mute)">还没跑过——点下面按钮开始第一次</span>';
   if (run.status === 'running') {
@@ -1585,9 +1600,9 @@ function runStatusText(run, kind) {
       <div style="font-size:11px;color:var(--mute);margin-top:4px">${kind === 'learn' ? '读积压消息提取行话，可能要几分钟（满推理）' : '写今天的吐槽日记，一两分钟'}——完成后自动刷新</div>`;
   }
   if (run.status === 'done') {
-    return `<div><span class="send-ok">✓ 上次完成</span> <span class="send-meta">耗时 ${fmtMs(run.elapsedMs)}${run.finishedAt ? ' · ' + new Date(run.finishedAt).toTimeString().slice(0, 5) : ''}</span></div>`;
+    return `<div><span class="send-ok">✓ 上次完成</span> <span class="send-meta">耗时 ${fmtMs(run.elapsedMs)}${run.finishedAt ? ' · ' + new Date(run.finishedAt).toTimeString().slice(0, 5) : ''}</span></div>${strayHtml(run.stray)}`;
   }
-  return `<div><span class="send-bad">✗ 上次出错</span></div><div class="send-meta">${esc(run.error ?? '')}</div><div style="font-size:10.5px;color:var(--mute)">可重试</div>`;
+  return `<div><span class="send-bad">✗ 上次出错</span></div><div class="send-meta">${esc(run.error ?? '')}</div><div style="font-size:10.5px;color:var(--mute)">可重试</div>${strayHtml(run.stray)}`;
 }
 
 // 触发 + 运行期间 5s 轮询

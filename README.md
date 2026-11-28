@@ -9,9 +9,10 @@ zcode-fishtank/            ← 本包，放到任意目录（路径可含中文�
 ├── README.md
 ├── docs/                  ← 施工指南 + 控制台指南
 ├── console/               ← 控制台（浏览器管理面板，node server.mjs 跑在 127.0.0.1:3201）
-│   ├── server.mjs         ← 零依赖单文件服务（配置/审阅/任务/表情/运维全在这）
+│   ├── server.mjs         ← 零依赖服务（配置/审阅/任务/表情/运维全在这）
+│   ├── task-guard.mjs     ← 任务护栏：任务书 prompt 提取 + 任务后"任务书外写入"检查
 │   ├── app.js / index.html / style.css
-│   └── tasks-manual.json  ← 历史定时任务的 prompt 归档（快照可追溯）
+│   └── tasks-manual.json  ← 历史定时任务的 prompt 归档（只做追溯；任务 prompt 的真源是鱼缸里的任务书文件）
 ├── fish-adapter/          ← 适配器（QQ 桥，唯一需要配置的组件）
 │   ├── config.json        ← 从 config.example.json 复制后填写（唯一配置源，控制台也读它）
 │   ├── maintenance.mjs    ← 定期清库（预览 / --apply）
@@ -20,7 +21,7 @@ zcode-fishtank/            ← 本包，放到任意目录（路径可含中文�
 │   ├── memory-review.mjs  ← 记忆审校（双击 审记忆.cmd）
 │   ├── wake/              ← 秒回巡逻的协议客户端（app-server 会话 + 护栏 + prompt 合成）
 │   └── lib/...
-├── guard/                 ← PreToolUse 守卫（钉死鱼会话的工具与路径）
+├── guard/                 ← PreToolUse 守卫（钉死鱼会话的工具与路径；记忆/人格卡/任务书/hooks 配置不许鱼写）
 │   └── fish-guard.mjs
 ├── fishpond-template/     ← 鱼的工作区模板（复制为 fishpond/ 并填内容）
 └── napcat/                ← NapCat 本体自装到这里

@@ -17,6 +17,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
 import { fillPlaceholders, toPlaceholders } from '../fish-adapter/lib/placeholder.mjs';
+import { loadTaskPrompt, snapshotWatch, checkTaskStray } from './task-guard.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = dirname(HERE);
@@ -1315,9 +1316,13 @@ function apiAutomations() {
 // subscribe → session/send（任务书 prompt + 原任务 modelSelection，不带 toolDenylist——
 // 需要 Read/Write/Edit；fishpond 的 fish-guard hooks 继续兜底）→ 收终止事件 → close。
 // 学习/日记的 cron 条目移除后由本机制取代（"不按不进行"）；prompt 真源=任务书文件（可随时编辑）。
+// 2026-11-28 更正：上面这句此前名不副实——runTaskAsync 实际优先读 tasks-manual.json 的归档快照、任务书
+// 只做回落，两处各改各的悄悄漂移（快照停在旧版，任务书上的修复一条没进生产）。现在只认任务书，
+// 见 runTaskAsync；tasks-manual.json 只剩归档用途（apiTaskRemove 把删掉的定时任务快照存进去）。
 const TASKS_MANUAL = join(HERE, 'tasks-manual.json');
 const TASK_DB = join(process.env.USERPROFILE ?? homedir(), '.zcode', 'v2', 'tasks-index.sqlite');
 const TASK_USAGE = join(ADAPTER_DIR, 'state', 'task-usage.jsonl'); // 学习/日记任务 token 流水（每次 done 一行，控制台 token 统计合并用）
+const TASK_QUARANTINE = join(ADAPTER_DIR, 'state', 'quarantine'); // 任务写出的"任务书外文件"隔离区（task-guard.mjs）
 const TASK_PROMPTS = { learn: join(FISHPOND, '.learner-prompt.md'), diary: join(FISHPOND, '.diary-prompt.md') };
 const TASK_MODEL_DEFAULT = {
   learn: { providerId: 'bigmodel-standard-api', modelId: 'GLM-5.3-Flash', options: { reasoningLevel: 'low' } }, // 库内原任务快照（Flash 而非满推理）
@@ -1530,20 +1535,21 @@ function apiTaskRemove(body) {
 // （G8e 曾改走 CLI -p 是因当时试的会话形态卡 MCP 认证循环；G9 用 wake 同款参数实测 6s 跑通，非协议问题。）
 async function runTaskAsync(kind) {
   const st = taskRuns.get(kind);
-  // prompt 真源 = tasks-manual.json 快照里库内纯 prompt（任务书 .xx-prompt.md 文件是"配置指南文档"，
-  // 直接整发会让 AI 把自己当配置助手而非执行任务——G8e 实测）；快照缺失回落任务书文件
-  const manual = readTasksManual();
-  const keyHint = kind === 'learn' ? '学习' : '日记';
-  const snapEntry = Object.values(manual.tasks ?? {}).find((t) => String(t.title ?? '').includes(keyHint));
-  let prompt = snapEntry?.prompt ?? '';
-  if (!prompt) {
-    try { prompt = readFileSync(TASK_PROMPTS[kind], 'utf8'); } catch (e) {
-      taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: `prompt 获取失败（快照与任务书都不可用）：${e.message}` });
-      return;
-    }
+  // prompt 真源 = 任务书文件里 ```text 围栏内的正文（task-guard.mjs loadTaskPrompt）。
+  // 只认这一处：读不到/为空直接报错让人修——不回落到可能过时的快照（2026-11-28：此前"快照优先、任务书
+  // 回落"的实现让任务书上的修复静默失效，见上方 G8e 注释）。历史上整发任务书会让 AI 把自己当配置助手，
+  // 那是任务书还带"请创建 CronCreate"外壳的时期；外壳已剥，现在只提取围栏正文，说明段不外发
+  const taskBookName = kind === 'learn' ? '.learner-prompt.md' : '.diary-prompt.md';
+  let prompt = '';
+  try { prompt = loadTaskPrompt(TASK_PROMPTS[kind]); } catch (e) {
+    taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: `任务书读取失败（${taskBookName}）：${e.message}` });
+    return;
   }
-  // 占位符渲染：快照/任务书只写占位符，真实值（路径/QQ号/鱼名）发模型前现填——
-  // 两个来源（快照/回落文件）在此已汇成同一个 prompt 变量，一处渲染全覆盖
+  if (!prompt) {
+    taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: `任务书为空或没有 \`\`\`text 围栏正文（${taskBookName}）` });
+    return;
+  }
+  // 占位符渲染：任务书只写占位符，真实值（路径/QQ号/鱼名）发模型前现填
   prompt = fillPlaceholders(prompt, placeholderValues());
   let cliPath = '';
   try { cliPath = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).patrol.cliPath ?? ''; } catch { /* 读不到后面报 */ }
@@ -1553,6 +1559,7 @@ async function runTaskAsync(kind) {
   // —— 精简协议客户端（照 wake 的 wakeOnce 收敛）——
   // 同款 ZCode 0.18.0 兼容：显式指定 builtin provider 配置路径（从 cliPath 推导）
   const builtinCfg = join(dirname(dirname(cliPath)), 'config', 'provider', 'zcode-builtin.json');
+  before = snapshotWatch(FISHPOND, kind); // 必须在 spawn 之前：之后模型才可能动文件
   const child = childSpawn(process.execPath, [cliPath, 'app-server'], { cwd: FISHPOND, env: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinCfg }, stdio: ['pipe', 'pipe', 'pipe'] });
   // C2：pid 落盘——控制台若在任务运行中重启，重启后的 reapOrphanTask() 靠它收割这个子进程
   try { writeFileSync(TASK_CHILD_PID, JSON.stringify({ pid: child.pid, kind, ts: st.startedAt })); } catch { /* 记录失败不阻断任务 */ }
@@ -1592,11 +1599,23 @@ async function runTaskAsync(kind) {
 
   let outTail = '';
   let settled = false;
+  let before = null; // 任务前监视快照（spawn 之前取；apiTaskRun 的 candidates.md.prev 写入也在此之前）
   const finish = (status, error = null, extra = {}) => {
     if (settled) return;
     settled = true;
     try { unlinkSync(TASK_CHILD_PID); } catch { /* 无记录或已清 */ }
-    taskRuns.set(kind, { status, startedAt: st.startedAt, finishedAt: Date.now(), outTail: outTail.slice(-500), error, ...extra });
+    // 任务书外写入检查（2026-11-28，task-guard.mjs）：对比任务前后快照——凭空出现的任务书外文件挪进
+    // 隔离区；已有文件被改动只报告（分不清是任务改的还是人在任务期间走审阅页改的，不自动还原）。
+    // 干净的运行不占字段。已知局限：超时路径的 finish 先于子进程完全退出，退出前的最后几笔写入可能漏检
+    let stray = null;
+    try { stray = checkTaskStray({ fishpond: FISHPOND, kind, before, quarantineRoot: TASK_QUARANTINE }); } catch (e) { stray = { checkError: String(e?.message ?? e) }; }
+    if (stray) {
+      // 两个任务可以同时跑：另一个正在运行时，报出的变化也可能出自它——标出来，免得冤枉
+      if (taskRuns.get(kind === 'learn' ? 'diary' : 'learn')?.status === 'running') stray.concurrent = true;
+      logConsoleOp('task-stray', { kind, status, ...stray });
+      console.log(`[task-stray] ${kind} 任务动了任务书之外的文件: ${JSON.stringify(stray)}`);
+    }
+    taskRuns.set(kind, { status, startedAt: st.startedAt, finishedAt: Date.now(), outTail: outTail.slice(-500), error, ...extra, ...(stray ? { stray } : {}) });
     // 任务 token 流水（只有 done 有 usage——失败/超时无产出不计费）：
     if (status === 'done' && extra.usage) {
       try {
