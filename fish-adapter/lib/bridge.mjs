@@ -1,6 +1,7 @@
-// 文件桥（规格 §9 兜底）：webhook 入站传输层未实装时的替代通道
+// 文件桥（回滚通道）：webhook 入站/出站回调已于 2026-11-28 整条切除，patrol 秒回是唯一链路；
+// 本文件保留 inbox 留档（patrol 模式在用）与 outbox 轮询代码（信箱回滚路径，平时停用）
 // 入站：QQ 消息 → 适配器入站链路 → 写 fishpond\.inbox\<ts>-<msgid>.json
-// 出站：ZCode 会话（automations 触发）写 .outbox\<ts>.json → 适配器轮询 → 出站链路 → QQ
+// 出站（回滚时）：ZCode 会话（automations 触发）写 .outbox\<ts>.json → 适配器轮询 → 出站链路 → QQ
 // 安全：.inbox/.outbox 在 fishpond 内，受 guard 钉死；鱼只能在这两个目录里交换数据
 // v6（改造任务书阶段 1）：outbox 整对象传递（新格式 {lines,...} 与老格式 {text} 并存）、
 // 解析三级兜底（不许静默丢）、inbox 溢出必留痕、inbox 文件删除以适配器注入名为准（D3）

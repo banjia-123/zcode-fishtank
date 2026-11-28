@@ -1,7 +1,9 @@
-// fish-adapter 主入口：QQ(OneBot v11) ⇄ ZCode webhook bot 的桥
+// fish-adapter 主入口：QQ(OneBot v11) ⇄ 秒回巡逻的桥
 // 启动：start.cmd（或 node adapter.mjs）
-// 链路：NapCat WS 事件 → inbound（过滤/解析/组装）→ POST ZCode /api/bots/webhook
-//       ZCode 出站回调 → :3200/zcode → outbound（验签/过滤/审计/限额）→ NapCat HTTP
+// 链路：NapCat WS 事件 → inbound（过滤/解析/攒批）→ patrol flush → wakeSafe（ZCode 会话，零工具）
+//       → outbound（审计/限额/表情闸/分段）→ NapCat HTTP
+// webhook 老链路已切除（2026-11-28）：POST ZCode /api/bots/webhook 入站 + /zcode 出站回调
+// 整条退役——patrol 秒回是唯一链路，file 桥只留 inbox 留档与 outbox 轮询代码（回滚见 README）
 import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { existsSync, appendFileSync, readFileSync, statSync } from 'node:fs';
@@ -39,7 +41,6 @@ function selfCheckModel() {
 }
 
 const cfg = loadConfig();
-const FILE_MODE = cfg.bridge?.mode === 'file';
 const PATROL = cfg.patrol?.enabled === true;
 
 // —— 启动自检：占位符没填完 / 关键安全项为空 → 拒绝启动（fail-closed）——
@@ -50,18 +51,7 @@ function requireFilled(v, name) {
   }
 }
 requireFilled(cfg.onebot.selfId, 'onebot.selfId');
-if (!FILE_MODE) {
-  // file 桥模式不经过 ZCode bot 系统，无需 botId/callbackUrl
-  requireFilled(cfg.zcode.botId, 'zcode.botId');
-  requireFilled(cfg.zcode.callbackUrl, 'zcode.callbackUrl');
-  if (!cfg.zcode.callbackUrl.includes('/api/bots/webhook')) {
-    log('boot', `zcode.callbackUrl 应指向 /api/bots/webhook，当前: ${cfg.zcode.callbackUrl} —— 拒绝启动`);
-    process.exit(1);
-  }
-  if (!cfg.zcode.secret) {
-    log('boot', '警告: zcode.secret 为空 —— 出站验签已禁用（仅限本机回环 127.0.0.1 的临时模式）');
-  }
-}
+// webhook 老链路已切除：zcode.botId/callbackUrl/secret 校验随 /zcode 出站回调一起退役
 if (!cfg.ownerQQ || String(cfg.ownerQQ).includes('<')) {
   log('boot', '警告: ownerQQ 未填写 —— 所有管理命令将被拒绝（fail-closed）');
 }
@@ -70,8 +60,8 @@ if (!cfg.ownerQQ || String(cfg.ownerQQ).includes('<')) {
 const onebot = new OneBotClient(cfg);
 
 // 本地巡逻（S2-B/D）：patrol.enabled=true 时消息进 Peer 缓冲攒批，wake 客户端常驻待命。
-// flush 出口本阶段仍为临时 handler（只留痕）；S2-E 接上 wakeSafe（合成报文 → 唤醒 → 出站）。
-// patrol 未启用时传 null，inbound 走老链路（file 桥/webhook），行为与之前完全一致
+// flush 出口接 wakeSafe（合成报文 → 唤醒 → 出站）。
+// patrol 未启用时传 null，inbound 退化为纯 inbox 留档（消息只存档不回复——退化跑法，不是正常形态）
 let patrolPeers = null;
 let wakeClient = null;
 let wakeStats = null; // createWakeSafe 的 stats()（/stats 端点用；patrol 未启用时为 null）
@@ -202,7 +192,7 @@ if (PATROL) {
     // inboxFile 传批次被回复消息的 id：出站的"每消息回复数"按它计数（同批共享、跨批独立）——
     // patrol 不带真文件名，不传会退化成按整群累计（两批后全被 limit-replies-per-message 误拦）
     // 引用概率化（2026-11-28）：must 不挂（@ 通知已指向）/多人批必挂/慢回复必挂/单人闲聊 20% 挂。
-    // 仅巡逻链路——webhook 模式（回滚路径）保持旧"每条挂引用"行为，刻意不概率化
+    // 信箱回滚路径（outbox 轮询）不走这里，无引用行为差异问题
     const quoteAgeSec = (Date.now() - Number(last.receivedAt ?? Date.now())) / 1000;
     const quote = shouldQuoteDecision({ must: Boolean(mustMsg.must), batchLen: batch.length, ageSec: quoteAgeSec });
     const out = await outbound.processMessage({ text: r.content }, {
@@ -250,7 +240,7 @@ const server = createServer((req, res) => {
           ok: true,
           pid: process.pid,
           uptimeMs: Math.round(process.uptime() * 1000),
-          mode: FILE_MODE ? 'file-bridge' : 'webhook',
+          mode: 'file-bridge',
           patrol: {
             enabled: PATROL,
             toolsOk,
@@ -339,7 +329,7 @@ const server = createServer((req, res) => {
           return;
         }
         if (!wakeClient) {
-          res.writeHead(409, { 'Content-Type': 'application/json' }).end('{"ok":false,"code":"E_NO_PATROL","message":"试聊台需要巡逻链路（patrol.enabled）——webhook 模式下不可用"}');
+          res.writeHead(409, { 'Content-Type': 'application/json' }).end('{"ok":false,"code":"E_NO_PATROL","message":"试聊台需要巡逻链路（patrol.enabled）——未启用巡逻时不可用"}');
           return;
         }
         let ctBody;
@@ -372,17 +362,6 @@ const server = createServer((req, res) => {
           log('chat-test', `failed: ${e.message}`);
           res.writeHead(502, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: false, code: 'E_WAKE', message: String(e.message ?? e).slice(0, 160) }));
         }
-        return;
-      }
-      if (req.method === 'POST' && /^\/zcode(\?|$)/.test(req.url ?? '')) {
-        let body;
-        try {
-          body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-        } catch {
-          res.writeHead(400).end('bad json');
-          return;
-        }
-        await outbound.handle(req, res, body);
         return;
       }
       res.writeHead(404).end();
@@ -440,24 +419,22 @@ setInterval(async () => {
 }, 120_000).unref();
 
 server.listen(cfg.listen.port, '127.0.0.1', () => {
-  log('boot', `fish-adapter listening on 127.0.0.1:${cfg.listen.port} (mode=${FILE_MODE ? 'file-bridge' : 'webhook'})`);
-  log('boot', `selfId=${cfg.onebot.selfId}${FILE_MODE ? '' : ` botId=${cfg.zcode.botId}`}`);
+  log('boot', `fish-adapter listening on 127.0.0.1:${cfg.listen.port} (mode=file-bridge)`);
+  log('boot', `selfId=${cfg.onebot.selfId}`);
   log('boot', `whitelist groups=${JSON.stringify(cfg.allow.groups)} private=${JSON.stringify(cfg.allow.private)}`);
-  if (FILE_MODE) {
-    ensureBridgeDirs(cfg); // inbox 留档目录保证存在（writeInboxFile 自带 ensure，双保险）
-    // 老链路关闭（2026-11-20 用户拍板提前关）：outbox 轮询停——信箱任务已删、无生产者，patrol 秒回是唯一出站。
-    // 回滚 = 恢复下面一行 startOutboxPolling + 重启（信箱任务书快照在 console/tasks-manual.json）
-    // startOutboxPolling(cfg, (text, meta) => outbound.processMessage(text, meta));
-    // inbox 留档 + 表情回收站 7 天滚动清理；运行日志 2MB 轮转：启动 10s 清一遍存量，之后每 6 小时一轮
-    const housekeep = () => {
-      sweepInboxArchive(cfg);
-      sweepEmojiTrash(cfg);
-      rotateOversizedLogs(cfg);
-    };
-    setTimeout(housekeep, 10_000).unref?.();
-    setInterval(housekeep, 6 * 3600_000).unref?.();
-    log('boot', '文件桥：仅 inbox 留档 + 存档滚动清理（inbox/表情回收站 7 天、运行日志 2MB 轮转）');
-  }
+  ensureBridgeDirs(cfg); // inbox 留档目录保证存在（writeInboxFile 自带 ensure，双保险）
+  // 老链路关闭（2026-11-20 用户拍板提前关）：outbox 轮询停——信箱任务已删、无生产者，patrol 秒回是唯一出站。
+  // 回滚 = 恢复下面一行 startOutboxPolling + 重启（信箱任务书快照在 console/tasks-manual.json）
+  // startOutboxPolling(cfg, (text, meta) => outbound.processMessage(text, meta));
+  // inbox 留档 + 表情回收站 7 天滚动清理；运行日志 2MB 轮转：启动 10s 清一遍存量，之后每 6 小时一轮
+  const housekeep = () => {
+    sweepInboxArchive(cfg);
+    sweepEmojiTrash(cfg);
+    rotateOversizedLogs(cfg);
+  };
+  setTimeout(housekeep, 10_000).unref?.();
+  setInterval(housekeep, 6 * 3600_000).unref?.();
+  log('boot', '文件桥：仅 inbox 留档 + 存档滚动清理（inbox/表情回收站 7 天、运行日志 2MB 轮转）');
   onebot.start();
 });
 

@@ -21,9 +21,9 @@ QQ群/私聊 ⇄ NapCat(OneBot v11 WS:3001) ⇄ 本适配器 ⇄ ZCode app-serve
 ```
 
 老链路（信箱轮询 `.inbox/.outbox ⇄ ZCode 会话`）已退役：outbox 轮询代码保留作回滚路径，
-`bridge.mode` 为 `"file"` 时仅做 inbox 留档与滚动清理。webhook 模式代码亦保留（`config.zcode`
-段），当前不使用——**`patrol.enabled: true` 是主开关，`patrol.cliPath`（ZCode CLI 的 zcode.cjs
-路径）为必填键，缺了启动即拒绝**。
+inbox 仅做留档与滚动清理。webhook 链路（POST ZCode `/api/bots/webhook` 入站 + `/zcode`
+出站回调）已于 2026-11-28 整条切除——**`patrol.enabled: true` 是主开关，`patrol.cliPath`
+（ZCode CLI 的 zcode.cjs 路径）为必填键，缺了启动即拒绝**。
 
 ## 文件
 
@@ -51,6 +51,30 @@ QQ群/私聊 ⇄ NapCat(OneBot v11 WS:3001) ⇄ 本适配器 ⇄ ZCode app-serve
 3. **启动**：上线脚本 `../napcat/fish-online.ps1`（全家桶：NapCat + watchdog + 适配器 + 控制台），
    或单跑 `node adapter.mjs`；重启用 `node restart-adapter.mjs`
 4. **自检**：`curl http://127.0.0.1:3200/health` → `ok`；boot 后首轮工具面自检过检（`adapter.log`）
+
+## 开发与测试纪律（环境坑清单）
+
+> 本包的运行形态是"**仓库副本开发，部署区运行**"——两份目录，纪律如下。这些是实战踩出来的坑，
+> 不看直接动手大概率会撞。
+
+1. **双目录纪律**：`zcode-fishtank/`（仓库）只做开发与 git；真实运行的是工作区下的
+   `fish-adapter/`、`console/`、`fishpond/`（部署区）。改代码的固定流程：
+   **仓库副本改 → `cp` 绝对路径同步部署区 → 重启 → 验证 → commit**。
+   ① cp 一律用绝对路径（相对路径在 PowerShell 下会被吃掉一层）；② 严禁直接改部署区
+   （下次同步会被仓库副本覆盖丢失）。
+2. **全套测试必须在部署区跑**：`test-wake.mjs` / `test-adapter.mjs` 在仓库副本会因
+   spawn 环境差异（cliPath/mock 路径解析）失败——不是代码问题，是测试对运行目录的假设。
+   验证以 `部署区/fish-adapter` 下 `node test-*.mjs` 全绿为准。
+3. **测试隔离**：测试经 `test-setup.mjs` 把 `FISH_ADAPTER_ROOT` 指向一次性临时目录；
+   测试端口专用 3298/3299（避开生产 3200/3201 与 NapCat 3000/3001）。
+4. **Windows/PowerShell 坑**（写 .ps1 或 inline 时）：
+   - 无 BOM UTF-8 文件按 ANSI 读——`.ps1` 里的中文注释会炸字符串终止符，**脚本一律纯 ASCII**
+   - 复杂脚本写成 `.ps1` 文件执行，不要 inline（bash `$_`/反引号会被两层壳吃掉）
+   - 中文路径的 `Start-Process` 乱码——用 `node -e` spawn 代替
+5. **Git Bash 坑**：`/tmp` 是 MSYS 路径，node 读到的是 `D:\tmp`——临时文件放工作区或走管道；
+   `cmd | tail` 后 `$?` 是 tail 的退出码，要真实退出码就分开跑。
+6. **热读缓存**：config/persona/名册等热文件全部 mtime 缓存（mtimeNs+size 双键）——改完
+   文件即刻生效无需重启，但同毫秒内二次覆写同一文件在测试里要注意（现键已根治撞车）。
 
 ## 安全设计（fail-closed 清单）
 

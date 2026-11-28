@@ -1,6 +1,6 @@
 // D6/专项债补盲：adapter.mjs 主入口集成测试（此前零覆盖——lib/wake 层全测了，装配层裸奔）
 // 覆盖：A4 配置形状 fail-fast（坏 config 拒绝启动）/ boot 后 /health /stats 契约 /
-//       /outbound/test 鉴权闸。子进程跑真 adapter，webhook 模式最轻装配（不 spawn app-server），
+//       /outbound/test 鉴权闸。子进程跑真 adapter，无巡逻的最轻装配（不 spawn app-server），
 //       WS 指向无人端口（重连日志无碍 boot——顺带锁定了这个容错事实）。
 // 跑法：node test-adapter.mjs，退出码 0 = 全过
 import { STATE_ROOT } from './test-setup.mjs';
@@ -23,8 +23,6 @@ const PORT = 3299; // 专用端口，避开生产 3200 与并行测试
 
 const mkCfg = (over = {}) => ({
   onebot: { selfId: '10000', wsUrl: 'ws://127.0.0.1:39999', httpUrl: 'http://127.0.0.1:39999', accessToken: 't' },
-  bridge: { mode: 'webhook' },
-  zcode: { callbackUrl: 'http://127.0.0.1:39998/api/bots/webhook', botId: 'b1', secret: 'test-secret' },
   botName: '测试鱼',
   allow: { groups: ['100'], private: ['1'], allowAllWhenEmpty: false },
   ownerQQ: '1',
@@ -76,21 +74,21 @@ const spawnAdapter = (cfg) => {
     // /stats 契约：控制台只读端点的结构
     const r3 = await fetch(`http://127.0.0.1:${PORT}/stats`);
     const j3 = await r3.json();
-    ok(j3.ok === true && j3.pid > 0 && j3.mode === 'webhook' && j3.patrol?.enabled === false, 'AD3 /stats 结构（pid/mode/patrol.enabled）', JSON.stringify(j3).slice(0, 120));
-    // webhook 模式没有巡逻链路 → quotas.wakes 为 null（合理降级）；says（出站额度）任何模式都有
+    ok(j3.ok === true && j3.pid > 0 && j3.mode === 'file-bridge' && j3.patrol?.enabled === false, 'AD3 /stats 结构（pid/mode/patrol.enabled）', JSON.stringify(j3).slice(0, 120));
+    // 无巡逻链路 → quotas.wakes 为 null（合理降级）；says（出站额度）任何模式都有
     ok(j3.quotas?.says != null && j3.quotas?.wakes === null, 'AD3b /stats 额度快照：says 恒有、wakes 在无巡逻模式降级为 null', JSON.stringify(j3.quotas ?? null).slice(0, 100));
 
     // /outbound/test 鉴权闸：无 token → 403 E_TOKEN（不进出站链）
     const r4 = await fetch(`http://127.0.0.1:${PORT}/outbound/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const j4 = await r4.json().catch(() => ({}));
     ok(r4.status === 403 && j4.code === 'E_TOKEN', 'AD4 /outbound/test 无 token 拒绝（403 E_TOKEN）', `${r4.status} ${JSON.stringify(j4).slice(0, 60)}`);
-    // /chat-test 鉴权闸（试聊台）：无 token → 403；webhook 模式带 token → 409 E_NO_PATROL
+    // /chat-test 鉴权闸（试聊台）：无 token → 403；无巡逻时带 token → 409 E_NO_PATROL
     const r5 = await fetch(`http://127.0.0.1:${PORT}/chat-test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"message":"hi"}' });
     const j5 = await r5.json().catch(() => ({}));
     ok(r5.status === 403 && j5.code === 'E_TOKEN', 'AD5 /chat-test 无 token 拒绝（403 E_TOKEN）', `${r5.status}`);
     const r5b = await fetch(`http://127.0.0.1:${PORT}/chat-test`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-console-token': 'console-tok' }, body: '{"message":"hi"}' });
     const j5b = await r5b.json().catch(() => ({}));
-    ok(r5b.status === 409 && j5b.code === 'E_NO_PATROL', 'AD5b webhook 模式（无巡逻链路）→ 409 E_NO_PATROL', `${r5b.status} ${JSON.stringify(j5b).slice(0, 80)}`);
+    ok(r5b.status === 409 && j5b.code === 'E_NO_PATROL', 'AD5b 无巡逻（未启用 patrol）→ 409 E_NO_PATROL', `${r5b.status} ${JSON.stringify(j5b).slice(0, 80)}`);
   }
   p.kill();
   await sleep(200);
@@ -104,7 +102,6 @@ const spawnAdapter = (cfg) => {
     listen: { port: PORT2 },
     patrol: { enabled: true, cliPath: join(HERE, 'wake', 'fake-app-server.mjs'), batchWindowMs: 100, mustWindowMs: 50, minWakeIntervalMs: 0, maxDailyWakes: 1000, model: { providerId: 'fake', modelId: 'fake-model' }, silentHours: null, wakeTimeoutMs: 30_000 },
   };
-  delete cfg6.bridge; // patrol 模式（bridge.mode 不设也行——file 模式留档即可）
   writeFileSync(join(STATE_ROOT, 'config.json'), JSON.stringify(cfg6, null, 1));
   // persona 目录：fake 协议下 buildTestPrompt 读 personaDir（fishpondDir 回退包根 fishpond——测试环境无 → 降级空串不炸）
   const p6 = spawnAdapter();

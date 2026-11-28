@@ -8,9 +8,6 @@
   "listen": {
     "port": 3200
   },
-  "bridge": {
-    "mode": "file"
-  },
   "botName": "<鱼名>",
   "identity": {
     "names": [

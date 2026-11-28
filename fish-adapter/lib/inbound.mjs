@@ -321,36 +321,22 @@ export function createInbound(cfg, onebot, patrol = null) {
     };
     const tierTag = ` tier=${hit.tier}${hit.name ? `(${hit.name})` : ''}${nameMuted ? '[muted]' : ''}`;
 
-    // 投递三分支：patrol（新链路，S2-B）/ file 桥（老链路）/ webhook（老链路）
+    // 投递两分支：patrol（唯一链路）/ inbox 纯留档（patrol 未启用的退化跑法）
+    // webhook 老链路已切除（2026-11-28）：POST ZCode /api/bots/webhook 的分支随老链路退役
     // patrol 模式：push 进该群缓冲（攒批窗口在 peer.mjs），inbox 只留档不进索引——
-    // 信箱任务不消费这批消息，防双回复；文件留着做失败重放与回滚
+    // 文件留着做失败重放与回滚
     if (patrol) {
       writeInboxFile(cfg, payload, { archive: true });
-      // S3.1 便签：收到就 append（纯本地不调模型）——patrol 开时才记（老链路无消费者）
+      // S3.1 便签：收到就 append（纯本地不调模型）——patrol 开时才记
       appendNote(chatKey, isGroup ? 'group' : 'private', { from: senderName, uid: String(event.user_id), text });
       patrol.push(chatKey, {
         ...payload,
         time: Number(event.time) || Math.floor(Date.now() / 1000), // QQ 秒级时间戳（D9 排序用）
       });
       log('inbound', `→ patrol (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${tierTag}${adminHit ? ' admin' : ''})`);
-    } else if (cfg.bridge?.mode === 'file') {
+    } else {
       writeInboxFile(cfg, payload);
       log('inbound', `→ inbox (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${tierTag}${adminHit ? ' admin' : ''})`);
-    } else {
-      try {
-        const res = await fetch(cfg.zcode.callbackUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-zcode-bot-secret': cfg.zcode.secret,
-          },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(15_000),
-        });
-        log('inbound', `→ ZCode ${res.status} (${chatKey} msg=${event.message_id} reply=${reply ? 'yes' : 'no'} mention=${mustReply}${tierTag}${adminHit ? ' admin' : ''})`);
-      } catch (e) {
-        log('inbound', `POST ZCode failed (${chatKey} msg=${event.message_id}): ${e.message}`);
-      }
     }
   }
 

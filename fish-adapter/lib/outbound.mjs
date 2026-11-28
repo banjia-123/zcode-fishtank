@@ -213,9 +213,9 @@ function dayKey() {
 const STATE_DIR = join(ROOT_DIR, 'state');
 const COUNTERS_FILE = join(STATE_DIR, 'counters.json');
 
-// —— D7 · 入参归一化（永久保留，阶段 4 也不许删）——
-// 老代码假设入参是字符串；格式一改，切回 bridge.mode=file 时模型输出的 JSON 会变成 text='' → 鱼彻底沉默。
-// 这一个函数是新格式与老格式并存、回滚能成立的前提。
+// —— D7 · 入参归一化（永久保留，不许删）——
+// 老代码假设入参是字符串；信箱回滚路径（outbox 轮询 → processMessage）传的是老格式 JSON，
+// 这里不归一模型输出的 JSON 会变成 text='' → 鱼彻底沉默。这一个函数是回滚能成立的前提。
 function normalize(raw) {
   if (typeof raw === 'string') return { text: raw };
   if (raw && Array.isArray(raw?.lines)) {
@@ -416,8 +416,8 @@ export function createOutbound(cfg, onebot, inboundState) {
 
     const st = perChat.get(chatKey) ?? { repliesToLastInbound: 0, proactive: [] };
     const inbound = inboundState.get(chatKey);
-    // 回复归属：文件桥出站带 inboxFile → 按入站文件计数（每条消息回复数天然 1:1）；
-    // 无 inboxFile（webhook 模式/主动消息）→ 退回时间窗近似（入站 2 分钟内算回复）
+    // 回复归属：出站带 inboxFile → 按入站文件计数（每条消息回复数天然 1:1）；
+    // 无 inboxFile（主动消息）→ 退回时间窗近似（入站 2 分钟内算回复）
     const replyKey = inboxFile;
     const isReply = replyKey != null || Boolean(inbound && Date.now() - inbound.lastInboundAt < 120_000);
     const countKey = replyKey != null ? `${chatKey}|${replyKey}` : chatKey;
@@ -576,33 +576,6 @@ export function createOutbound(cfg, onebot, inboundState) {
     }
   }
 
-  // HTTP 回调入口（ZCode webhook 出站模式用；文件桥模式不走这里）
-  async function handle(req, res, body) {
-    // ① 验签：x-zcode-bot-secret 必须与配置一致；secret 为空 = 显式禁用（本机回环临时模式）
-    const configuredSecret = String(cfg.zcode.secret ?? '');
-    if (configuredSecret) {
-      const got = String(req.headers['x-zcode-bot-secret'] ?? '');
-      if (got !== configuredSecret) {
-        log('outbound', `rejected: bad/missing x-zcode-bot-secret (ip=${req.socket?.remoteAddress})`);
-        res.writeHead(403).end('forbidden');
-        return;
-      }
-    }
-
-    const payload = typeof body.text === 'string' || Array.isArray(body.lines)
-      ? body
-      : (typeof body.message === 'string' ? { text: body.message } : { text: '' });
-    const meta = {
-      chatType: body.chatType,
-      chatId: body.chatId != null ? String(body.chatId) : (body.group_id != null ? String(body.group_id) : (body.groupId != null ? String(body.groupId) : null)),
-      userId: body.userId != null ? String(body.userId) : (body.user_id != null ? String(body.user_id) : null),
-      source: 'http',
-    };
-    const result = await processMessage(payload, meta);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(result.action === 'sent' ? { ok: true, action: 'sent' } : { ok: true, action: result.action, reason: result.reason }));
-  }
-
   // 控制台 /stats 用（只读快照，无副作用）：今日已说条数 / 上限 / 各群滚动窗口余量
   function stats() {
     const roll = {};
@@ -613,5 +586,5 @@ export function createOutbound(cfg, onebot, inboundState) {
     return { dailyCount, maxDailyTotal: cfg.limits.maxDailyTotal, roll };
   }
 
-  return { handle, processMessage, stats };
+  return { processMessage, stats };
 }

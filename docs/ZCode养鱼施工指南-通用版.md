@@ -52,7 +52,7 @@ NapCat（QQ 协议端，独立进程 + watchdog 保活）
 fishpond/（鱼的工作区，ZCode 独立项目）
    ├─ persona.md        人格卡
    ├─ emojis/           表情包库（人工策展 + index.json 图说）
-   ├─ memory/           记忆（core / candidates / short / vocab）
+   ├─ memory/           记忆（core / candidates / roster / vocab / style）
    └─ .zcode/config.json  PreToolUse hook（guard 硬钉）
    ↕
 ZCode（automation 定时驱动"鱼" + guard 管住"鱼的手"）
@@ -232,7 +232,7 @@ persona.md 必备要素（实测有效结构）：
 - 独立 learner automation（每 6 小时）游标式读增量 → 提取行话候选 → `vocab.json` 写 `status: "candidate"`
 - **人工确认闸门不可省**：candidate → confirmed 才注入聊天任务书（防学到脏话/错话直接上群）
 - **审校工具**：双击 `fish-adapter/审词库.cmd`（行话逐条转正/驳回/复审下架，confirmed 名额 ≤20）与 `审记忆.cmd`（记忆逐条迁入/删除，core.md 红线 60 行）——即审即存、自动备份 .bak、中断不丢已审的
-- 记忆三层：`core.md`（人工确认才进）/ `candidates.md`（鱼写候选）/ `short.json`（当前话题）
+- 记忆两层：`core.md`（人工确认才进）/ `candidates.md`（鱼写候选）。信箱时代的 `short.json`（话题便签）已随信箱退役删除（2026-11-28）：唯一生产者是退役的信箱任务、现行链路（learner/diary/wake/控制台）均不读写，纯死数据
 - **日记子系统（可选，每天一篇）**：独立 diary automation（建议 23:43 睡前档）游标式读聊天增量，以鱼第一人称写"少女吐槽日记"到 `fishpond/diary/YYYY-MM-DD.md`——**纯档案零消费者**：不读不写 memory、不进聊天上下文、不发 QQ，与学习任务各用独立游标（共用会互相吃进度）。任务书模板 `fishpond-template/diary-prompt-template.md`。两个坑：①游标首次启用前手动初始化为"当天 0 点后第一行的前一行行号"，否则首篇倒灌全部历史；②推游标语义见踩坑 19（模型爱写"末行+1"，任务书必须钉死"行号数字本身"）
 
 ### 运维配套（上线前做好，一劳永逸）
@@ -304,6 +304,17 @@ persona.md 必备要素（实测有效结构）：
 | 33 | ZCode 自动更新 0.17.1→0.18.0 后无头 app-server 启动即崩（code=1 循环）：找不到 CLI ZCode Built-in Provider Config | 新版查找路径从 <resources>/glm/provider/ 变化——用官方环境变量 **ZCODE_BUILTIN_PROVIDER_CONFIG_FILE** 显式指向实际配置（<resources>/config/provider/zcode-builtin.json，从 cliPath 推导），spawn 时注入 env；巡逻与任务两条 spawn 链都要加 |
 | 34 | automation 会话"复用"省钱是歧路：对话历史每轮累积，每轮 6~7 次请求里按缓存命中价反复重付，攒到 5 万 tok 时单轮反贵 54% | 每轮新会话，稳定内容放固定前缀吃缓存（巡逻 prompt 即此设计）；"止损"靠频繁 compact 反而更贵——compact 本身一次全量大 miss 且时机不可控，不要走这条路 |
 
+### 5.1 开发与测试环境纪律（复现前必读）
+
+本项目是"**仓库副本开发，部署区运行**"的双目录形态，以下纪律全部是实战踩出来的，不看直接动手大概率撞：
+
+1. **双目录纪律**：`zcode-fishtank/`（仓库）只做开发与 git；真实运行的是工作区下的 `fish-adapter/`、`console/`、`fishpond/`（部署区）。固定流程：**仓库副本改 → `cp` 绝对路径同步部署区 → 重启 → 验证 → commit**。cp 一律绝对路径（相对路径会被吃掉一层）；严禁直接改部署区（下次同步被覆盖丢失）。
+2. **全套测试必须在部署区跑**：`test-wake.mjs` / `test-adapter.mjs` 在仓库副本会因 spawn 环境差异失败（不是代码问题，是测试对运行目录的假设）——以部署区 `node test-*.mjs` 全绿为准。
+3. **PowerShell**：无 BOM UTF-8 按 ANSI 读（`.ps1` 中文注释炸字符串终止符，脚本纯 ASCII）；复杂脚本写 `.ps1` 文件执行别 inline；中文路径 `Start-Process` 乱码改用 `node -e` spawn。
+4. **Git Bash**：`/tmp` 是 MSYS 路径（node 读成 `D:\tmp`）；`cmd | tail` 后 `$?` 是 tail 的退出码，要真实退出码分开跑。
+5. **测试隔离**：`test-setup.mjs` 把 `FISH_ADAPTER_ROOT` 指向一次性临时目录；测试端口专用 3298/3299。
+6. **热读缓存**：config/persona/名册热文件全部 mtime 缓存（mtimeNs+size 双键），改文件即刻生效无需重启。
+
 ---
 
 ## 6. 已知限制与演进路线
@@ -314,7 +325,7 @@ persona.md 必备要素（实测有效结构）：
 - **订阅模型边界**：Start Plan 等 `account:` 型 provider 只在桌面交互宿主可用，无头会话（巡逻/任务的载体）不装载（见踩坑 26）——控制台下拉里置灰留位，ZCode 开放后自动可用
 - **NapCat 稳定性**：偶发退出/假在线（新号风控 or 版本问题）；断连期间的群消息不会补发（OneBot 推送制固有限制，重连只保证"之后的"消息）
 - **多媒体边界**：图片收发已支持（收图视觉理解、表情包图文同条、分享卡片扫描——需模型支持图片输入）；**语音未做**；视频本体不能看（仅卡片层——标题/简介/封面）
-- **官方 webhook**：ZCode 未来若实装 webhook bot 入站，文件桥可整体退役（适配器模式字段一键切换）
+- **webhook 链路已切除（2026-11-28）**：入站 POST ZCode 与 /zcode 出站回调整条退役（UI 有入口但底层未实装，老分支是死维护负担）——patrol 秒回是唯一链路，文件桥仅留 inbox 留档与 outbox 轮询回滚代码
 - **清理体系闭环**：ZCode 会话（手动 prune，秒回时代平时恒 0 属正常——无头会话不落库）、inbox 存档（7 天）、群图附件（1 小时）、表情回收站（7 天）、运行日志（2MB 轮转）、配置备份（10 份）、ops 流水（5MB）；chat.jsonl（学习数据源）永不清理
 
 ---
