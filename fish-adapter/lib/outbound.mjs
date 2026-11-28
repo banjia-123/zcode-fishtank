@@ -183,6 +183,39 @@ export function sameStickerRecentlyUsed(cfg, chatKey, emojiBase, cooldownSec, no
   }
 }
 
+// —— 动作缀同缀冷却（2026-11-28）：（喝茶）（目移）这类文字缀同群 300s 内不重复，重复时剥缀保正文 ——
+// 起因：最近 30 条出站 57% 带缀、（喝茶）单缀 8 次霸榜——表情闸管图管不了文字缀，prompt 软约束（方法一）
+// 对 Flash 档只敢当引导。记账天然自洽：speak.jsonl 的 text 是剥后落盘的——历史 text 里出现的缀=当年
+// 放行的缀，被剥的不在账上，无需额外字段。与同图冷却分工同款：图闸管图、缀闸管文字缀。
+// 形态约束（防误杀）：只认"行尾/段尾收束"位置的缀（闭括号后紧跟 换行/结束/中文标点）；句中括号
+// （"（不是）我说真的"）不提不剥；含 "." 的（图名域）不收（那是表情链路的事）
+const ACTION_SUFFIX = /（([^（()）.]{1,12})）(?=[\n\r]|$|[，。！？；、])/g;
+
+function suffixGateState() {
+  const DEF = { enabled: true, cooldownSec: 300 };
+  try {
+    const g = hotJson(EMOJI_GATE_FILE, (d) => d.suffixGate ?? {}) ?? {};
+    return {
+      enabled: g.enabled !== false,
+      cooldownSec: Number.isFinite(Number(g.cooldownSec)) && Number(g.cooldownSec) >= 0 ? Number(g.cooldownSec) : DEF.cooldownSec, // 显式 0 = 关闭
+    };
+  } catch (e) {
+    log('outbound', `WARN suffixGate 读 config 失败，回退默认 ${JSON.stringify(DEF)}: ${e.message}`);
+    return { ...DEF };
+  }
+}
+
+export function sameSuffixRecentlyUsed(cfg, chatKey, suffix, cooldownSec, now = Date.now()) {
+  try {
+    return readSpeakLines(cfg).some((r) => r.chat === chatKey
+      && typeof r.text === 'string' && r.text.includes(`（${suffix}）`)
+      && now - Date.parse(r.ts) < cooldownSec * 1000);
+  } catch (e) {
+    log('outbound', `WARN suffix cooldown 读 speak.jsonl 失败，本次按冷却命中剥缀: ${e.message}`);
+    return true;
+  }
+}
+
 // 发言记录（v3 §8.2 feedback 迭代基础）：鱼每次成功发言追加一行，供"像人/像AI"标注
 // emojiPath：随行的表情绝对路径（记 basename）——控制台表情包页"使用次数/从未使用"的数据源（G2 起累积）
 function recordSpeak(cfg, chatKey, text, source, emojiPath) {
@@ -384,6 +417,24 @@ export function createOutbound(cfg, onebot, inboundState) {
     if (emojiPath && gate.enabled && gate.cooldownSec > 0 && sameStickerRecentlyUsed(cfg, chatKey, basename(emojiPath), gate.cooldownSec)) {
       log('outbound', `emoji cooldown: ${chatKey} "${basename(emojiPath).slice(0, 40)}" ${gate.cooldownSec}s 内已用过——本次降级纯文本`);
       emojiPath = null;
+    }
+
+    // ①.7 同缀冷却（2026-11-28）：同一动作缀同群 300s 内不重复——重复时剥缀保正文（缀是装饰，
+    // 剥掉正文语义无损）。config suffixGate {enabled, cooldownSec}；显式 0 = 关闭。
+    // 双路剥除：isNew 发送走 textLines（行数组）、老格式走 text——只剥一处会漏（SF2 实测）
+    const sGate = suffixGateState();
+    if (sGate.enabled && sGate.cooldownSec > 0) {
+      const stripRow = (row) => {
+        for (const m of [...row.matchAll(ACTION_SUFFIX)]) {
+          if (sameSuffixRecentlyUsed(cfg, chatKey, m[1], sGate.cooldownSec)) {
+            log('outbound', `suffix cooldown: ${chatKey} "（${m[1]}）" ${sGate.cooldownSec}s 内已用过——剥缀保正文`);
+            row = row.replace(m[0], '');
+          }
+        }
+        return row;
+      };
+      if (isNew) { textLines = textLines.map(stripRow); text = textLines.join('\n'); }
+      else text = stripRow(text);
     }
 
     if (!text.trim() && !emojiPath) return drop('empty');

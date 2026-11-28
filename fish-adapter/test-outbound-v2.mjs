@@ -9,7 +9,7 @@ import { createInbound, isBusy } from './lib/inbound.mjs';
 import { createOutbound, typingDelayMs, shouldQuoteDecision } from './lib/outbound.mjs';
 import { stripOsHead, sweepStalePerChat } from './lib/outbound.mjs';
 import { parseOutboxBody, startOutboxPolling, bridgeDirs } from './lib/bridge.mjs';
-import { sameStickerRecentlyUsed } from './lib/outbound.mjs';
+import { sameStickerRecentlyUsed, sameSuffixRecentlyUsed } from './lib/outbound.mjs';
 
 // 审计日志、计数器都落在 STATE_ROOT（一次性临时目录）下——测试不碰生产文件
 const AUDIT_LOG = join(STATE_ROOT, 'logs', 'audit.log');
@@ -387,6 +387,67 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   const rF7 = await outbound.processMessage({ lines: [' referencing （独处.png 的梗）挺好笑'] }, meta('931', 'fr7.json'));
   ok(rF7.action === 'sent' && !hasImg(bF7), 'FR7 括号内引用（图名后跟空格续写）不转图');
   ok(textOf(bF7).includes('（独处.png 的梗）'), 'FR7b 引用形态字面保留', textOf(bF7).slice(-80));
+
+  unlinkSync(join(STATE_ROOT, 'config.json')); // 还原默认
+}
+
+// 同缀冷却（2026-11-28）：（喝茶）类动作缀同群 300s 内不重复，重复时剥缀保正文（用户裁决 300s）
+// 记账自洽：speak.jsonl 的 text 是剥后落盘——历史 text 里的缀=当年放行的缀，无需额外字段
+{
+  writeFileSync(join(STATE_ROOT, 'config.json'), JSON.stringify({ suffixGate: { enabled: true, cooldownSec: 300 } }));
+  const textOfS = (n) => segs(n).map((c) => c.p.message.filter((x) => x.type === 'text').map((x) => x.data.text).join('')).join('');
+
+  // SF1：首发带缀 → 放行记账（text 含缀）
+  const bS1 = calls.length;
+  const rS1 = await outbound.processMessage({ lines: ['很好。（喝茶）'] }, meta('940', 'sf1.json'));
+  ok(rS1.action === 'sent' && textOfS(bS1).includes('（喝茶）'), 'SF1 首发带缀放行记账', textOfS(bS1).slice(-40));
+
+  // SF2：同群 300s 内同缀 → 剥缀保正文
+  const bS2 = calls.length;
+  const rS2 = await outbound.processMessage({ lines: ['再来一口。（喝茶）'] }, meta('940', 'sf2.json'));
+  ok(rS2.action === 'sent' && !textOfS(bS2).includes('（喝茶）') && textOfS(bS2).includes('再来一口。'), 'SF2 同缀命中被剥、正文保留', textOfS(bS2).slice(-40));
+
+  // SF3：不同缀不受影响（（目移）没在冷却里）
+  const bS3 = calls.length;
+  const rS3 = await outbound.processMessage({ lines: ['换个动作。（目移）'] }, meta('940', 'sf3.json'));
+  ok(rS3.action === 'sent' && textOfS(bS3).includes('（目移）'), 'SF3 换缀放行（冷却按缀文本隔离）', textOfS(bS3).slice(-40));
+
+  // SF4：他群同缀 → 放行（按 chatKey 隔离）
+  const bS4 = calls.length;
+  const rS4 = await outbound.processMessage({ lines: ['隔壁也喝。（喝茶）'] }, meta('941', 'sf4.json'));
+  ok(rS4.action === 'sent' && textOfS(bS4).includes('（喝茶）'), 'SF4 他群同缀放行（不串台）', textOfS(bS4).slice(-40));
+
+  // SF5：句中形态不剥（缀后跟正文续写 → 非收束位置，不提不剥）
+  const bS5 = calls.length;
+  const rS5 = await outbound.processMessage({ lines: ['（喝茶）吾再想想'] }, meta('940', 'sf5.json'));
+  ok(rS5.action === 'sent' && textOfS(bS5).includes('（喝茶）'), 'SF5 句中缀不提不剥（收束位置约束）', textOfS(bS5).slice(-40));
+
+  // SF6：缀-only 消息同缀命中 → 剥光 → drop（empty）
+  const bS6 = calls.length;
+  const rS6 = await outbound.processMessage({ lines: ['（喝茶）'] }, meta('940', 'sf6.json'));
+  ok(rS6.action === 'dropped' && segs(bS6).length === 0, 'SF6 纯缀命中剥光后整条 drop', JSON.stringify(rS6));
+
+  // SF7：显式 cooldownSec=0 = 关闸（同缀照发）
+  writeFileSync(join(STATE_ROOT, 'config.json'), JSON.stringify({ suffixGate: { enabled: true, cooldownSec: 0 } }));
+  const bS7 = calls.length;
+  const rS7 = await outbound.processMessage({ lines: ['关闸了再喝。（喝茶）'] }, meta('940', 'sf7.json'));
+  ok(rS7.action === 'sent' && textOfS(bS7).includes('（喝茶）'), 'SF7 cooldownSec=0 关闸放行', textOfS(bS7).slice(-40));
+
+  // SF8 纯函数：窗口边界/损坏行/ENOENT
+  const cfgP = { bridge: { fishpondDir: tmp.replace(/\\/g, '/') } };
+  writeFileSync(join(bridgeDirs(cfgP).base, 'logs', 'speak.jsonl'), [
+    JSON.stringify({ ts: new Date(Date.now() - 60_000).toISOString(), chat: 'g:x', text: '嗯。（喝茶）' }),
+    '{broken',
+    JSON.stringify({ ts: new Date(Date.now() - 400_000).toISOString(), chat: 'g:x', text: '久。（喝茶）' }),
+  ].join('\n') + '\n', 'utf8');
+  ok(sameSuffixRecentlyUsed(cfgP, 'g:x', '喝茶', 300) === true, 'SF8a 窗内同缀 → true（损坏行跳过）');
+  const cfgOld = { bridge: { fishpondDir: mkdtempSync(join(tmpdir(), 'fish-sf2-')).replace(/\\/g, '/') } };
+  mkdirSync(join(bridgeDirs(cfgOld).base, 'logs'), { recursive: true });
+  writeFileSync(join(bridgeDirs(cfgOld).base, 'logs', 'speak.jsonl'), JSON.stringify({ ts: new Date(Date.now() - 400_000).toISOString(), chat: 'g:x', text: '久。（喝茶）' }) + '\n', 'utf8');
+  ok(sameSuffixRecentlyUsed(cfgOld, 'g:x', '喝茶', 300) === false, 'SF8b 超窗（6.7 分钟前 vs 300s）→ false');
+  ok(sameSuffixRecentlyUsed(cfgP, 'g:y', '喝茶', 300) === false, 'SF8c 他群不串台');
+  const cfgNoFile = { bridge: { fishpondDir: mkdtempSync(join(tmpdir(), 'fish-sf-')).replace(/\\/g, '/') } };
+  ok(sameSuffixRecentlyUsed(cfgNoFile, 'g:x', '喝茶', 300) === false, 'SF8d 无 speak.jsonl → false');
 
   unlinkSync(join(STATE_ROOT, 'config.json')); // 还原默认
 }
