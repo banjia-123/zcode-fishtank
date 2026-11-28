@@ -13,6 +13,7 @@ import { OneBotClient } from './lib/onebot.mjs';
 import { createInbound, dedupHas } from './lib/inbound.mjs';
 import { createOutbound, shouldQuoteDecision } from './lib/outbound.mjs';
 import { createPeers } from './lib/peer.mjs';
+import { scheduleDeferRetry } from './lib/deliver.mjs';
 import { poolExtrasFor, sortByNewest } from './lib/imgpool.mjs';
 import { createAppServerClient, DENY_ALL } from './wake/app-server.mjs';
 import { createWakeSafe } from './wake/safe.mjs';
@@ -195,18 +196,34 @@ if (PATROL) {
     // 信箱回滚路径（outbox 轮询）不走这里，无引用行为差异问题
     const quoteAgeSec = (Date.now() - Number(last.receivedAt ?? Date.now())) / 1000;
     const quote = shouldQuoteDecision({ must: Boolean(mustMsg.must), batchLen: batch.length, ageSec: quoteAgeSec });
-    const out = await outbound.processMessage({ text: r.content }, {
+    const outMeta = {
       chatType: last.chatType,
       chatId: last.chatId,
       userId: mustMsg.userId,
       inboxFile: mustMsg.messageId,
       replyToMessageId: quote ? mustMsg.messageId : null,
       source: 'patrol',
-    });
+    };
+    const out = await outbound.processMessage({ text: r.content }, outMeta);
     log('patrol', `batch=${info.batchId} msgs=${batch.length} → 出站 ${out.action}（${r.modelMs}ms）`);
     // S3.1：鱼的回复也记便签（sent 才记——[SILENT]/被审计丢弃的不进，否则它看不到自己说过什么）
+    const noteKind = last.chatType === 'private' ? 'private' : 'group';
+    const noteSent = () => appendNote(chatKey, noteKind, { from: cfg.botName || '鱼', uid: 'bot', text: r.content });
     if (out.action === 'sent') {
-      appendNote(chatKey, last.chatType === 'private' ? 'private' : 'group', { from: cfg.botName || '鱼', uid: 'bot', text: r.content });
+      noteSent();
+    } else if (out.action === 'defer') {
+      // defer 补偿重试（2026-11-28）：限额窗口满的批次此前在这里被直接废弃——"错峰延后，不丢"是
+      // outbox 轮询时代的语义，切除 outbox 后没人重发，当天静默丢了 7 条高峰回复。现排入延迟重试
+      // （90s / 150s 两档，lib/deliver.mjs），窗口滑走即发出；耗尽才丢弃。fire-and-forget：不阻塞
+      // flush handler，timer 已 unref 不挂住进程退出
+      log('patrol', `batch=${info.batchId} 限额窗口满，已排入延迟重试`);
+      scheduleDeferRetry({
+        process: (text) => outbound.processMessage({ text }, outMeta),
+        text: r.content,
+        log: (m) => log('patrol', m),
+        tag: ` batch=${info.batchId}`,
+        onDone: (res) => { if (res.action === 'sent') noteSent(); },
+      });
     }
   });
   // S2.13 兜底：60 秒扫一次，队首滞留超 bufferStaleMs 的强制 flush（WS 断流不憋死消息）

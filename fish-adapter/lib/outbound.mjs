@@ -510,7 +510,9 @@ export function createOutbound(cfg, onebot, inboundState) {
       }
     }
 
-    // 滚动窗口（第四类）：同群 5 分钟出站总量封顶。超限返回 defer：不丢（必回的也要发），错峰延后
+    // 滚动窗口（第四类）：同群 5 分钟出站总量封顶。超限返回 defer——本层不排队不重发，由投递层
+    // （lib/deliver.mjs scheduleDeferRetry）按延迟表重投，窗口滑走即发出、耗尽才丢弃。
+    // 2026-11-28 前：outbox 轮询时代靠文件保留下轮重发兜住；切除 outbox 后无人消费 defer = 静默丢失
     const windowMin = windowMs / 60_000;
     const maxPerWindow = cfg.limits?.maxRepliesPerGroupPer5Min;
     const rl = (rollWindow.get(chatKey) ?? []).filter((t) => Date.now() - t < windowMs);
@@ -518,7 +520,7 @@ export function createOutbound(cfg, onebot, inboundState) {
     if (chatType === 'group' && maxPerWindow != null && rl.length >= maxPerWindow) {
       const last = lastDeferLog.get(chatKey) ?? 0;
       if (Date.now() - last > 30_000) {
-        log('outbound', `defer (limit-window-${windowMin}min) chat=${chatKey} queued=${rl.length}（错峰延后，不丢）`);
+        log('outbound', `defer (limit-window-${windowMin}min) chat=${chatKey} 窗内已发 ${rl.length}/${maxPerWindow}（投递层延迟重试）`);
         lastDeferLog.set(chatKey, Date.now());
       }
       return { action: 'defer', reason: 'limit-window' };
