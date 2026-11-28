@@ -120,16 +120,34 @@ export function stripOsHead(text, chatKey) {
   return text;
 }
 
+// speak.jsonl 尾部读取（P2-2b，2026-11-28）：文件长期只增不删（控制台表情统计页的数据源，
+// 不能清），冷却/条数闸每次发表情都全文件 scan+parse 会随时间线性变慢——只扫尾部 256KB
+//（≈4000 行，两个闸的窗口绰绰有余），截断点首行不完整直接丢（宁丢不错）。ENOENT 返回空，
+// 真读失败抛给调用方（fail-closed 语义各自处理）。
+const SPEAK_TAIL_BYTES = 256 * 1024;
+function readSpeakLines(cfg) {
+  const speak = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
+  let buf;
+  try {
+    buf = readFileSync(speak);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return []; // 还没发过言（首跑）= 0 条记录，不是错误
+    throw e; // 其他读失败原样抛，fail-closed 语义归调用方
+  }
+  const oversized = buf.length > SPEAK_TAIL_BYTES;
+  const str = (oversized ? buf.subarray(-SPEAK_TAIL_BYTES) : buf).toString('utf8');
+  const lines = str.split('\n');
+  if (oversized) lines.shift();
+  return lines.filter(Boolean)
+    .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter(Boolean);
+}
+
 function recentEmojiCount(cfg, chatKey, window) {
   try {
-    const speak = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
-    const rows = readFileSync(speak, 'utf8').trim().split('\n').filter(Boolean)
-      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-      .filter((r) => r && r.chat === chatKey)
-      .slice(-window);
+    const rows = readSpeakLines(cfg).filter((r) => r.chat === chatKey).slice(-window);
     return rows.filter((r) => r.emoji).length;
   } catch (e) {
-    if (e?.code === 'ENOENT') return 0; // 没有发言记录 = 近期 0 次表情（正常首跑）
     // 真读失败（损坏/权限/磁盘）：fail-closed——按"已达上限"拦截。
     // 原先 return 0 是 fail-open：speak.jsonl 读不了时硬闸无声失效，表情照发（G9b 的后门）
     log('outbound', `WARN emoji gate 读 speak.jsonl 失败，本次按已达上限拦截: ${e.message}`);
@@ -140,16 +158,13 @@ function recentEmojiCount(cfg, chatKey, window) {
 // 同图冷却（P2，2026-11-28，借鉴 MaiBot emoji_system 对 600s 内用过的表情降权）：条数闸（G9b）
 // 只防"表情刷屏"，防不了"同一张图连发"——复读机形态。数据源复用 speak.jsonl 的 emoji 字段
 // （recordSpeak 已记 basename），零新存储。冷却窗内该 chatKey 发过同 basename → 拦。
-// ENOENT = 还没发过言不拦；真读失败 fail-closed 当冷却命中（与 recentEmojiCount 同哲学）。
+// 真读失败 fail-closed 当冷却命中（与 recentEmojiCount 同哲学）。
 export function sameStickerRecentlyUsed(cfg, chatKey, emojiBase, cooldownSec, now = Date.now()) {
   try {
-    const speak = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
-    const rows = readFileSync(speak, 'utf8').trim().split('\n').filter(Boolean)
-      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-      .filter((r) => r && r.chat === chatKey && r.emoji);
-    return rows.some((r) => r.emoji === emojiBase && now - Date.parse(r.ts) < cooldownSec * 1000);
+    return readSpeakLines(cfg).some((r) => r.chat === chatKey
+      && r.emoji === emojiBase
+      && now - Date.parse(r.ts) < cooldownSec * 1000);
   } catch (e) {
-    if (e?.code === 'ENOENT') return false;
     log('outbound', `WARN emoji cooldown 读 speak.jsonl 失败，本次按冷却命中拦截: ${e.message}`);
     return true;
   }
@@ -164,7 +179,11 @@ function recordSpeak(cfg, chatKey, text, source, emojiPath) {
       ts: new Date().toISOString(), chat: chatKey, text: text.slice(0, 500), source,
       ...(emojiPath ? { emoji: basename(emojiPath) } : {}),
     }) + '\n', 'utf8');
-  } catch { /* 记录失败不阻断发送 */ }
+  } catch (e) {
+    // 记录失败不阻断发送，但必须留痕——静默吞掉 = 表情统计/同图冷却的数据源无声消失
+    //（P2-2a 审计修复：原先空 catch，测试环境目录缺失时冷却直接失效无人知晓）
+    log('outbound', `WARN speak.jsonl 记录失败（表情统计/同图冷却数据源缺失）: ${e.message}`);
+  }
 }
 
 // 模型说沉默就沉默——适配器层硬拦，不依赖提示词（提示词说"不想回就输出 [SILENT]"，模型可能忘）
@@ -335,8 +354,10 @@ export function createOutbound(cfg, onebot, inboundState) {
     }
 
     // ①.6 同图冷却（P2）：同 chatKey 同 basename 在 cooldownSec 窗内已发过 → 本次降级纯文本。
-    // 显式 cooldownSec=0 关闭；与条数闸独立——刷屏闸管"量"，冷却管"重复"
-    if (emojiPath && gate.cooldownSec > 0 && sameStickerRecentlyUsed(cfg, chatKey, basename(emojiPath), gate.cooldownSec)) {
+    // 显式 cooldownSec=0 关闭；与条数闸独立——刷屏闸管"量"，冷却管"重复"。
+    // enabled=false = 总开关关闭，两个闸（含冷却）全关（P1-1 审计修复：原先只关条数闸，
+    // 冷却仍以默认 600s 生效——控制台"关闭硬闸"的意图是表情自由）
+    if (emojiPath && gate.enabled && gate.cooldownSec > 0 && sameStickerRecentlyUsed(cfg, chatKey, basename(emojiPath), gate.cooldownSec)) {
       log('outbound', `emoji cooldown: ${chatKey} "${basename(emojiPath).slice(0, 40)}" ${gate.cooldownSec}s 内已用过——本次降级纯文本`);
       emojiPath = null;
     }

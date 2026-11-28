@@ -201,7 +201,8 @@ if (PATROL) {
     // 原出站链路：审计 / 限额 / 表情 / 分段全走这一条（不绕过任何一道闸）
     // inboxFile 传批次被回复消息的 id：出站的"每消息回复数"按它计数（同批共享、跨批独立）——
     // patrol 不带真文件名，不传会退化成按整群累计（两批后全被 limit-replies-per-message 误拦）
-    // 引用概率化（2026-11-28）：must 不挂（@ 通知已指向）/多人批必挂/慢回复必挂/单人闲聊 20% 挂
+    // 引用概率化（2026-11-28）：must 不挂（@ 通知已指向）/多人批必挂/慢回复必挂/单人闲聊 20% 挂。
+    // 仅巡逻链路——webhook 模式（回滚路径）保持旧"每条挂引用"行为，刻意不概率化
     const quoteAgeSec = (Date.now() - Number(last.receivedAt ?? Date.now())) / 1000;
     const quote = shouldQuoteDecision({ must: Boolean(mustMsg.must), batchLen: batch.length, ageSec: quoteAgeSec });
     const out = await outbound.processMessage({ text: r.content }, {

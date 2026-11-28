@@ -20,12 +20,14 @@ export function log(tag, ...parts) {
 // 热读 JSON 文件（mtime 缓存；同一文件的多个读取方共享一次 stat/parse——D5 收敛原先
 // emojiGateState / typingSecPerChar / selfCheckModel 三处各自为政的同构样板，其中两个
 // 读同一份 config.json 却各 stat 各 parse）。stat/parse 失败原样抛出，降级语义归调用方。
-const hotDocs = new Map(); // 文件绝对路径 -> { mtime, doc }
+// P2-1（2026-11-28）：缓存键 mtimeMs 毫秒单键与 wake/prompt.mjs 三处缓存同病——同毫秒二次
+// 写不同内容判"未变"读旧值。升 mtimeNs（BigInt 纳秒）+ size 双键，与 prompt 侧同构根治。
+const hotDocs = new Map(); // 文件绝对路径 -> { mtimeNs, size, doc }
 export function hotJson(file, pick = (d) => d) {
   const st = statSync(file);
   let c = hotDocs.get(file);
-  if (!c || c.mtime !== st.mtimeMs) {
-    c = { mtime: st.mtimeMs, doc: JSON.parse(readFileSync(file, 'utf8')) };
+  if (!c || c.mtimeNs !== st.mtimeNs || c.size !== st.size) {
+    c = { mtimeNs: st.mtimeNs, size: st.size, doc: JSON.parse(readFileSync(file, 'utf8')) };
     hotDocs.set(file, c);
   }
   return pick(c.doc);

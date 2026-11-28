@@ -326,6 +326,15 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   ok(sameStickerRecentlyUsed(cfgProbe, 'g:y', 'a.png', 600) === false, 'CD5c 他群记录不串台');
   const cfgNoFile = { bridge: { fishpondDir: mkdtempSync(join(tmpdir(), 'fish-cd-')).replace(/\\/g, '/') } };
   ok(sameStickerRecentlyUsed(cfgNoFile, 'g:x', 'a.png', 600) === false, 'CD5d 无 speak.jsonl（ENOENT）→ false');
+
+  // CD6 总开关（P1-1 审计修复）：enabled=false = 条数闸与同图冷却全关（原先冷却漏关仍生效）
+  writeFileSync(join(STATE_ROOT, 'config.json'), JSON.stringify({ emojiGate: { enabled: false, cooldownSec: 600 } }));
+  const b6a = calls.length;
+  await outbound.processMessage({ lines: ['开关关了第一次'], sticker: 'test.png' }, meta('920', 'cd6a.json'));
+  const b6b = calls.length;
+  const r6b = await outbound.processMessage({ lines: ['开关关了第二次'], sticker: 'test.png' }, meta('920', 'cd6b.json'));
+  ok(hasImage(b6a) && r6b.action === 'sent' && hasImage(b6b), 'CD6 enabled=false：同图二连发都放行（条数闸+冷却全关）', JSON.stringify(r6b));
+  unlinkSync(join(STATE_ROOT, 'config.json')); // 还原默认（后续无 config 读取方，防未来用例被污染）
 }
 
 // OS 首段剥除（2026-11-26）：独白混进正文首段时剥段保留正文（11-22/11-26 两次实战形态）
