@@ -16,7 +16,7 @@ import { readFileSync, statSync, openSync, readSync, closeSync, writeFileSync, u
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
-import { fillPlaceholders, toPlaceholders } from '../fish-adapter/lib/placeholder.mjs';
+import { fillPlaceholders } from '../fish-adapter/lib/placeholder.mjs';
 import { prepareTaskRun, checkTaskStray } from './task-guard.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1484,9 +1484,9 @@ function writeTasksManual(data) {
   renameSync(tmp, TASKS_MANUAL);
 }
 
-// 占位符值表（任务书运行时渲染 + 归档净化共用）：真实值只从 config.json 与目录常量来——
-// 任务书/快照里只写 <fishpond目录>/<鱼QQ号> 等占位符，发模型前现填（fillPlaceholders），
-// 归档入库前反向洗净（toPlaceholders）。值缺失的键自动跳过（占位符保持原样，不瞎填）
+// 占位符值表（任务书运行时渲染用）：真实值只从 config.json 与目录常量来——
+// 任务书里只写 <fishpond目录>/<鱼QQ号> 等占位符，发模型前现填（fillPlaceholders）。
+// 值缺失的键自动跳过（占位符保持原样，不瞎填）
 function placeholderValues() {
   let c = {};
   try { c = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch { /* 缺 config 占位符不渲染 */ }
@@ -1510,16 +1510,18 @@ function apiTaskRemove(body) {
   let db = null;
   try {
     db = new DatabaseSync(TASK_DB);
-    const row = db.prepare('SELECT automation_id, title, cron_expr, prompt, model_selection FROM automations WHERE automation_id = ?').get(body.id);
+    const row = db.prepare('SELECT automation_id, title, cron_expr, model_selection FROM automations WHERE automation_id = ?').get(body.id);
     if (!row) throw httpErr(404, 'E_NOT_FOUND', '任务库里没有这条 automation（可能已删）');
     const kindOf = titleKindOf;
     const snap = readTasksManual();
     snap.archivedAt = new Date().toISOString();
     snap.tasks[kindOf(row.title) + '_' + row.automation_id.slice(-6)] = {
       id: row.automation_id, title: row.title, cron: row.cron_expr,
-      // 归档净化：库里的 prompt 可能带真实值（当初建任务时写的），入快照前反向换成占位符——
-      // 快照是运行时渲染的模板源，也是控制台页直接展示的内容，不能存实值
-      prompt: toPlaceholders(row.prompt, placeholderValues()), modelSelection: (() => { try { return JSON.parse(row.model_selection ?? 'null'); } catch { return null; } })(),
+      // prompt 不入快照（2026-11-28 轻档清挂账）：任务真源已切到任务书文件（fail-closed），归档快照
+      // 里的旧 prompt 只是历史标本——躺着像真源，正是 style.json 事件的温床（注释说真源在 A、
+      // 实际读的是 B，修复静默失效）。归档只留元数据（何时删的什么任务、什么cron），
+      // 指令考古走 git 历史与任务书本身；任务库里被删行的 prompt 随行删除，不另存
+      modelSelection: (() => { try { return JSON.parse(row.model_selection ?? 'null'); } catch { return null; } })(),
       removedAt: new Date().toISOString(),
     };
     writeTasksManual(snap);
