@@ -90,6 +90,17 @@ export function typingDelayMs(prevText, secPerChar) {
   return Math.min(8000, Math.max(1500, Math.round(sec * 1000)));
 }
 
+// —— 引用概率化（2026-11-28，借鉴 MaiBot scenes/group/quoting.py 的离线拟合思路，砍成规则+低概率）——
+// 此前巡逻回复每条首段必挂引用——真人不这样：QQ 的 @ 通知天然指向，被 @ 回复没人引用；
+// 单人闲聊回复最近一条直接说；只有多人同时说话（要指定回复谁）和隔久了的慢回复才需要引用指方向。
+// 纯函数可单测，rand 注入（测试固定行为）。
+export function shouldQuoteDecision({ must, batchLen, ageSec }, rand = Math.random) {
+  if (must) return false; // 被 @/叫名：@ 通知已指向，引用冗余
+  if (batchLen >= 3) return true; // 多人讨论：不引用不知道在回谁
+  if (ageSec >= 90) return true; // 慢回复（错峰/熔断延迟）：隔久了要指向
+  return rand() < 0.2; // 单人闲聊偶尔引用——真人会引用好笑的那条
+}
+
 // —— OS 首段剥除（2026-11-26）：模型的"内心 OS"（被 @ 了、有人叫吾、得回）偶尔混进正文首段——
 // 群友看到的是她的决策过程而非回复（11-22/11-26 两次实战）。特征：首段极短且是"叙述自己收到消息"
 // 的元语句。剥掉该段保留后续正常正文（比整条丢弃好——本次 89 字好内容差点陪葬）；无后续段则整条照发

@@ -176,6 +176,22 @@ try {
   const p16d = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir, chatKey: 'g:777' });
   ok(!p16d.includes('【你记下的事') && !p16d.includes('【群里的行话】') && !p16d.includes('认人名册'), 'P16d 无记忆文件三段全不渲染（不装死不炸）');
 
+  // P17 【现在】时间注入（2026-11-28 P1）：格式/位置/试聊台隔离
+  const p17 = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir, chatKey: 'g:777' });
+  ok(/\d{4}-\d{2}-\d{2} 周[日一二三四五六] \d{2}:\d{2}（时间用来对作息和语境，不用刻意提）/.test(p17), 'P17a 时间行格式（日期+星期+时分+防滥用行）');
+  ok(p17.indexOf('【现在】') < p17.indexOf('【以下是 QQ 消息'), 'P17b 时间在消息段之前（紧贴语境）');
+  // 时间在稳定前缀区之后：带 core 的目录里，【现在】必须在 core 段后（分钟级变化不进缓存前缀）
+  const dir5 = mkdtempSync(join(tmpdir(), 'fish-now-'));
+  try {
+    writeFileSync(join(dir5, 'persona.md'), '# 人格\nx', 'utf8');
+    mkdirSync(join(dir5, 'memory'), { recursive: true });
+    writeFileSync(join(dir5, 'memory', 'core.md'), '- [2026-11-14] 记事一条', 'utf8');
+    const p17c = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir5, chatKey: 'g:777' });
+    ok(p17c.indexOf('【你记下的事') !== -1 && p17c.indexOf('【现在】') > p17c.indexOf('【你记下的事'), 'P17c 时间在稳定前缀区（core）之后——分钟变化不打穿缓存');
+  } finally { try { rmSync(dir5, { recursive: true, force: true }); } catch { /* 临时目录 */ } }
+  const p17d = buildTestPrompt({}, [], 'x', { personaDir: dir });
+  ok(!p17d.includes('【现在】'), 'P17d 试聊台不带时间行（隔离精简）');
+
   // P14 试聊台 buildTestPrompt（2026-11-27）：persona 注入/历史格式/[SILENT] 规则
   const cfg14 = { onebot: { selfId: '12345' }, ownerQQ: '99999', botName: '鱼鱼', allow: { groups: ['777'] } };
   const p14 = buildTestPrompt(cfg14, [

@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, unlink
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInbound, isBusy } from './lib/inbound.mjs';
-import { createOutbound, typingDelayMs } from './lib/outbound.mjs';
+import { createOutbound, typingDelayMs, shouldQuoteDecision } from './lib/outbound.mjs';
 import { stripOsHead, sweepStalePerChat } from './lib/outbound.mjs';
 import { parseOutboxBody, startOutboxPolling } from './lib/bridge.mjs';
 
@@ -270,6 +270,18 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   ok(oldRange, '拟真 secPerChar=0 回退旧节奏 ∈ [1500, 4000]');
   const dNaN = typingDelayMs('任何', Number.NaN);
   ok(dNaN >= 1500 && dNaN <= 4000, '拟真 NaN 视为关闭，回退旧节奏', `d=${Math.round(dNaN)}`);
+}
+
+// 引用概率化（2026-11-28，P1 借鉴 MaiBot quoting）：决策纯函数四规则——must 不挂/多人批必挂/慢回复必挂/闲聊 20%
+{
+  ok(shouldQuoteDecision({ must: true, batchLen: 1, ageSec: 5 }) === false, 'Q1 被 @/叫名不挂引用（@ 通知已指向）');
+  ok(shouldQuoteDecision({ must: false, batchLen: 3, ageSec: 5 }) === true, 'Q2 多人批（≥3 条）必挂（要指定回谁）');
+  ok(shouldQuoteDecision({ must: false, batchLen: 1, ageSec: 95 }) === true, 'Q3 慢回复（≥90s）必挂（隔久了要指向）');
+  ok(shouldQuoteDecision({ must: false, batchLen: 1, ageSec: 5 }, () => 0.1) === true, 'Q4a 单人闲聊低概率挂（rand<0.2）');
+  ok(shouldQuoteDecision({ must: false, batchLen: 2, ageSec: 30 }, () => 0.9) === false, 'Q4b 单人闲聊多数不挂（rand≥0.2）');
+  let rate = 0;
+  for (let k = 0; k < 1000; k++) if (shouldQuoteDecision({ must: false, batchLen: 1, ageSec: 1 })) rate += 1;
+  ok(rate > 120 && rate < 280, 'Q5 闲聊挂引用概率约 20%（1000 次采样）', `rate=${rate / 10}%`);
 }
 
 // OS 首段剥除（2026-11-26）：独白混进正文首段时剥段保留正文（11-22/11-26 两次实战形态）
