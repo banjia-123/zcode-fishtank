@@ -1,7 +1,7 @@
 // 任务护栏测试（2026-11-28）：console/task-guard.mjs——prompt 提取 + 任务书外写入检查
 // 覆盖：围栏提取（两份真实任务书模板）/ 快照对比（可写、免检、新增、改动、删除）/ 隔离 / 干净返回 null
 // 跑法：node test-task-guard.mjs，退出码 0 = 全过
-import { extractTaskPrompt, loadTaskPrompt, snapshotWatch, diffWatch, quarantineAdded, checkTaskStray } from './task-guard.mjs';
+import { extractTaskPrompt, loadTaskPrompt, snapshotWatch, diffWatch, quarantineAdded, checkTaskStray, prepareTaskRun } from './task-guard.mjs';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -104,6 +104,48 @@ try {
   w('memory/zz.json', '{}');
   const q3 = quarantineAdded(pond, quar, 'learn', ['memory/zz.json', 'memory/不存在.json'], new Date('2026-11-28T05:00:00.000Z'));
   ok(q3.quarantined.join() === 'memory/zz.json' && q3.failed.length === 1 && q3.failed[0].rel === 'memory/不存在.json', 'TG12 隔离：成功的移走，失败的逐个报告原因', JSON.stringify(q3));
+
+  // ── PT 任务启动准备（prepareTaskRun）：真实执行——顺序错误（暂时性死区）在这里就会炸，而不是等点按钮 ──
+  w('.learner-prompt.md', '# 任务书\n\n```text\n你是<鱼名>的学习任务。\n```\n\n## 维护记录\n- 噪音');
+  const PT = (over = {}) => prepareTaskRun({ kind: 'learn', taskBookPath: join(pond, '.learner-prompt.md'), fishpond: pond, render: (p) => p.replace('<鱼名>', '伊丽莎白'), ...over });
+  const p1 = PT();
+  ok(p1.ok === true && p1.prompt === '你是伊丽莎白的学习任务。', 'PT1a 准备成功：prompt 是渲染过的围栏正文', JSON.stringify(p1).slice(0, 120));
+  ok(p1.before instanceof Map && p1.before.has('memory/vocab.json'), 'PT1b 返回任务前快照');
+  const p2 = PT({ taskBookPath: join(pond, 'no-such-book.md'), taskBookName: '.learner-prompt.md' });
+  ok(p2.ok === false && /任务书读取失败（\.learner-prompt\.md）/.test(p2.error), 'PT2 任务书读不到 → 报错带文件名', p2.error);
+  const goodBook = '# 任务书\n\n```text\n你是<鱼名>的学习任务。\n```\n\n## 维护记录\n- 噪音';
+  w('.learner-prompt.md', '```text\n```');
+  const p3 = PT();
+  ok(p3.ok === false && /为空或没有/.test(p3.error), 'PT3 空围栏 → 报错', p3.error);
+  w('.learner-prompt.md', goodBook); // 后面几条要有有效的任务书，否则都撞在"为空"上测不到目标分支
+  const boom = PT({ render: () => { throw new Error('render boom'); } });
+  ok(boom.ok === false && boom.error.includes('渲染失败') && boom.error.includes('render boom'), 'PT4 渲染抛错 → 报错带原因', boom.error);
+  const blank = PT({ render: () => '   ' });
+  ok(blank.ok === false && /渲染后为空/.test(blank.error), 'PT5 渲染后为空 → 报错', blank.error);
+  w('.learner-prompt.md', '纯 prompt 无围栏');
+  ok(PT().ok === true, 'PT5b 无围栏的纯 prompt 任务书也能准备');
+
+  // runTaskAsync 要启动真实模型会话，测试进不去——织一张专门针对"先赋值、后声明"的网
+  //（暂时性死区：语法检查抓不到，2026-11-28 同一天在三个文件里各犯过一次）
+  const detectAssignBeforeDecl = (lines) => {
+    const out = [];
+    lines.forEach((line, i) => {
+      const d = line.match(/^\s+(?:let|const)\s+(\w+)\b/);
+      if (d && lines.slice(0, i).some((l) => new RegExp(`^\\s*${d[1]}\\s*=[^=]`).test(l))) out.push(d[1]);
+    });
+    return out;
+  };
+  ok(detectAssignBeforeDecl(['  before = f();', '  let before = null;']).join() === 'before', 'PT6 检测器自检：带病样例（赋值在前、声明在后）必须被报出');
+  ok(detectAssignBeforeDecl(['  let before = null;', '  before = f();', '  let x = 1;', '  if (x == 1) y = 2;', '  const z = a === b;']).length === 0, 'PT6b 检测器自检：正常顺序与 == / === 不误报');
+  {
+    const src = readFileSync(join(HERE, 'server.mjs'), 'utf8');
+    const start = src.indexOf('async function runTaskAsync(');
+    const end = start >= 0 ? src.indexOf('\n}\n', start) : -1;
+    ok(start >= 0 && end > start, 'PT6c 能定位 runTaskAsync 函数体');
+    const offenders = detectAssignBeforeDecl(src.slice(start, end).split('\n'));
+    ok(offenders.length === 0, 'PT6d runTaskAsync 内没有"先赋值、后声明"的变量', ` offenders: ${offenders.join(',')}`);
+    ok(!/\b(snapshotWatch|loadTaskPrompt)\(/.test(src.slice(start, end)), 'PT6e runTaskAsync 不再自己读任务书/取快照（已收进可测的 prepareTaskRun）');
+  }
 } finally {
   try { rmSync(root, { recursive: true, force: true }); } catch { /* 临时目录 */ }
 }

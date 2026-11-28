@@ -114,3 +114,18 @@ export function checkTaskStray({ fishpond, kind, before, quarantineRoot, now = n
 export function loadTaskPrompt(path) {
   return extractTaskPrompt(readFileSync(path, 'utf8'));
 }
+
+// 任务启动前的准备（全是同步的本地读取，不碰模型）：读任务书 → 渲染占位符 → 取任务前快照。
+// 抽出来的原因：这段逻辑原先散在 runTaskAsync 里，而那个函数要启动真实模型会话、测试进不去——
+// 一处"赋值在前、声明在后"的暂时性死区语法检查抓不到，上线后点按钮才炸（2026-11-28 实锤）。
+// 现在准备阶段在这里被测试真实执行；runTaskAsync 拿到的只是一个现成的结果对象，只读不写。
+// 返回 { ok:true, prompt, before } 或 { ok:false, error }
+export function prepareTaskRun({ kind, taskBookPath, fishpond, render = (x) => x, taskBookName }) {
+  const name = taskBookName ?? String(taskBookPath).split(/[\\/]/).pop();
+  let prompt = '';
+  try { prompt = loadTaskPrompt(taskBookPath); } catch (e) { return { ok: false, error: `任务书读取失败（${name}）：${e?.message ?? e}` }; }
+  if (!prompt) return { ok: false, error: `任务书为空或没有 \`\`\`text 围栏正文（${name}）` };
+  try { prompt = render(prompt); } catch (e) { return { ok: false, error: `任务书占位符渲染失败（${name}）：${e?.message ?? e}` }; }
+  if (typeof prompt !== 'string' || !prompt.trim()) return { ok: false, error: `任务书渲染后为空（${name}）` };
+  return { ok: true, prompt, before: snapshotWatch(fishpond, kind) };
+}

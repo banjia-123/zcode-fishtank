@@ -17,7 +17,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, homedir } from 'node:os';
 import { fillPlaceholders, toPlaceholders } from '../fish-adapter/lib/placeholder.mjs';
-import { loadTaskPrompt, snapshotWatch, checkTaskStray } from './task-guard.mjs';
+import { prepareTaskRun, checkTaskStray } from './task-guard.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = dirname(HERE);
@@ -1535,22 +1535,22 @@ function apiTaskRemove(body) {
 // （G8e 曾改走 CLI -p 是因当时试的会话形态卡 MCP 认证循环；G9 用 wake 同款参数实测 6s 跑通，非协议问题。）
 async function runTaskAsync(kind) {
   const st = taskRuns.get(kind);
-  // prompt 真源 = 任务书文件里 ```text 围栏内的正文（task-guard.mjs loadTaskPrompt）。
-  // 只认这一处：读不到/为空直接报错让人修——不回落到可能过时的快照（2026-11-28：此前"快照优先、任务书
-  // 回落"的实现让任务书上的修复静默失效，见上方 G8e 注释）。历史上整发任务书会让 AI 把自己当配置助手，
-  // 那是任务书还带"请创建 CronCreate"外壳的时期；外壳已剥，现在只提取围栏正文，说明段不外发
-  const taskBookName = kind === 'learn' ? '.learner-prompt.md' : '.diary-prompt.md';
-  let prompt = '';
-  try { prompt = loadTaskPrompt(TASK_PROMPTS[kind]); } catch (e) {
-    taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: `任务书读取失败（${taskBookName}）：${e.message}` });
+  // 启动准备（读任务书 → 渲染占位符 → 任务前快照）在 task-guard.mjs 的 prepareTaskRun：全是本地读取，
+  // 测试能真实执行。这个函数要启动真实模型会话、测试进不去——逻辑放在这里，出错只能等上线后点按钮
+  // 才暴露（2026-11-28 实锤：一处"赋值在前、声明在后"的暂时性死区让学习任务一启动就报错）
+  // prompt 只认任务书这一处：读不到直接报错让人修，不回落到可能过时的快照（见上方 G8e 注释）
+  const prep = prepareTaskRun({
+    kind,
+    taskBookPath: TASK_PROMPTS[kind],
+    taskBookName: kind === 'learn' ? '.learner-prompt.md' : '.diary-prompt.md',
+    fishpond: FISHPOND,
+    render: (p) => fillPlaceholders(p, placeholderValues()),
+  });
+  if (!prep.ok) {
+    taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: prep.error });
     return;
   }
-  if (!prompt) {
-    taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: `任务书为空或没有 \`\`\`text 围栏正文（${taskBookName}）` });
-    return;
-  }
-  // 占位符渲染：任务书只写占位符，真实值（路径/QQ号/鱼名）发模型前现填
-  prompt = fillPlaceholders(prompt, placeholderValues());
+  const { prompt, before } = prep; // 之后只读不写——没有分离的声明与赋值，就没有"先用后声明"
   let cliPath = '';
   try { cliPath = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')).patrol.cliPath ?? ''; } catch { /* 读不到后面报 */ }
   if (!cliPath) { taskRuns.set(kind, { status: 'error', startedAt: st.startedAt, finishedAt: Date.now(), error: 'config 里没有 patrol.cliPath' }); return; }
@@ -1559,7 +1559,6 @@ async function runTaskAsync(kind) {
   // —— 精简协议客户端（照 wake 的 wakeOnce 收敛）——
   // 同款 ZCode 0.18.0 兼容：显式指定 builtin provider 配置路径（从 cliPath 推导）
   const builtinCfg = join(dirname(dirname(cliPath)), 'config', 'provider', 'zcode-builtin.json');
-  before = snapshotWatch(FISHPOND, kind); // 必须在 spawn 之前：之后模型才可能动文件
   const child = childSpawn(process.execPath, [cliPath, 'app-server'], { cwd: FISHPOND, env: { ...process.env, ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinCfg }, stdio: ['pipe', 'pipe', 'pipe'] });
   // C2：pid 落盘——控制台若在任务运行中重启，重启后的 reapOrphanTask() 靠它收割这个子进程
   try { writeFileSync(TASK_CHILD_PID, JSON.stringify({ pid: child.pid, kind, ts: st.startedAt })); } catch { /* 记录失败不阻断任务 */ }
@@ -1599,7 +1598,6 @@ async function runTaskAsync(kind) {
 
   let outTail = '';
   let settled = false;
-  let before = null; // 任务前监视快照（spawn 之前取；apiTaskRun 的 candidates.md.prev 写入也在此之前）
   const finish = (status, error = null, extra = {}) => {
     if (settled) return;
     settled = true;
