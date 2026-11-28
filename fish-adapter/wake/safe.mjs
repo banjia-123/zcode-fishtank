@@ -90,9 +90,11 @@ export function createWakeSafe(cfg, client) {
 
   // 唤醒前的全部本地闸门（S2.9/S2.13/D14/S3.2）：不满足直接不唤醒，一分钱不花
   // must 批次（@/叫名）只豁免最小间隔——有人叫她必须回；静默/熔断/每日上限仍拦
+  // rewrite（打回重写，2026-11-28）同样只豁免最小间隔：它是同一次回复的延续，紧跟首调必然 <20s，
+  // 不豁免就永远被 min-interval 拦住；静默/熔断/每日上限照拦，dailyWakes 照计（它是真调用）
   // 私聊三条覆盖（S3.2）：不套群静默时段（半夜来一条，回一句比装死好）；
   //   但私聊独立每日上限和全局总额各过一遍（不是二选一），防陌生人一条消息烧额度
-  function gate(chatKey, isMust = false) {
+  function gate(chatKey, isMust = false, isRewrite = false) {
     const isPrivate = chatKey.startsWith('p:');
     if (!isPrivate && inSilentHours(P.silentHours)) return 'silent-hours';
     const pu = pausedUntil.get(chatKey) ?? 0;
@@ -100,7 +102,7 @@ export function createWakeSafe(cfg, client) {
     if (counters.day !== dayKey()) { counters = { day: dayKey(), dailyWakes: 0, privateWakes: 0 }; saveCounters(counters); }
     if (counters.dailyWakes >= maxDailyWakes) return `limit-daily-wakes(${counters.dailyWakes})`;
     if (isPrivate && (counters.privateWakes ?? 0) >= privateMaxPerDay) return `limit-private-per-day(${counters.privateWakes}/${privateMaxPerDay})`;
-    if (!isMust) {
+    if (!isMust && !isRewrite) {
       const lw = lastWakeAt.get(chatKey) ?? 0;
       if (Date.now() - lw < minIntervalMs) return `min-interval(${Math.round((Date.now() - lw) / 1000)}s ago)`;
     }
@@ -124,7 +126,7 @@ export function createWakeSafe(cfg, client) {
 
   async function runJob(job) {
     const { chatKey, prompt, meta } = job;
-    const blocked = gate(chatKey, Boolean(meta.must));
+    const blocked = gate(chatKey, Boolean(meta.must), Boolean(meta.rewrite));
     if (blocked) {
       // 本地拦截不是唤醒：wake 计数不动，只留一行便于排障（S2.16「空转 = 0」核对的是真唤醒）
       logWake({ batchId: meta.batchId, chatKey, msgs: meta.msgs ?? 0, result: 'skipped', reason: blocked });
@@ -173,7 +175,8 @@ export function createWakeSafe(cfg, client) {
   }
 
   // wakeSafe(chatKey, prompt, meta)：并发闸内跑一次唤醒
-  // meta：{ batchId, msgs, hadTier2, onTier2Silent }（hadTier2 + silent → 退避结算，S2-E 传）
+  // meta：{ batchId, msgs, hadTier2, onTier2Silent, rewrite }（hadTier2 + silent → 退避结算，S2-E 传；
+  //       rewrite=true → 打回重写调用，豁免最小间隔，见 gate）
   function wakeSafe(chatKey, prompt, meta = {}) {
     return new Promise((resolve) => {
       // 失败/超时统一 resolve 出 { error, ... } 结果对象（runJob 全分支 job.resolve）——

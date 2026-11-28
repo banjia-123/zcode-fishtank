@@ -476,5 +476,81 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   ok(sweepStalePerChat(pc2, now) === 0, 'SW1c 无超龄时零删除');
 }
 
+// 打回重写契约（2026-11-28）：meta.rewriteable=true 时，缀冷却/缀-only/OS 首段不降级发送，改返回
+// intercepted 交给投递层重写。能走到 intercepted 的原文必须已过 ②~④.5 安全闸（敏感草稿不打回）。
+// 不带标志行为不变（RW7 回归）。两处顺序事实也锁住：缀打回点在限额窗口检查之前、OS 打回点在之后
+{
+  writeFileSync(join(STATE_ROOT, 'config.json'), JSON.stringify({ suffixGate: { enabled: true, cooldownSec: 300 } }));
+  const speakAt = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
+  const rw = (chatId, f, text) => outbound.processMessage({ text }, { ...meta(chatId, f), rewriteable: true });
+  const textOfR = (n) => segs(n).map((c) => c.p.message.filter((x) => x.type === 'text').map((x) => x.data.text).join('')).join('');
+  appendFileSync(speakAt, JSON.stringify({ ts: new Date().toISOString(), chat: 'g:950', text: '嗯。（喝茶）', source: 'test' }) + '\n', 'utf8');
+
+  // RW1 同缀冷却命中 → intercepted，不发送，hint 齐全
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw1.json', '这猫圆得很有底气。（喝茶）');
+    ok(r.action === 'intercepted' && r.reason === 'suffix-cooldown', 'RW1 同缀冷却命中 → intercepted(suffix-cooldown)', JSON.stringify(r));
+    ok(segs(b).length === 0, 'RW1b 不发送');
+    ok(r.hint?.originalText === '这猫圆得很有底气。（喝茶）' && r.hint?.strippedText === '这猫圆得很有底气。' && r.hint?.suffixes?.join() === '喝茶', 'RW1c hint：原文 / 机械剥缀版 / 命中缀', JSON.stringify(r.hint));
+  }
+  // RW2 整条只有缀 → suffix-empty，机械降级版为空（投递层据此决定兜底是丢弃）
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw2.json', '（喝茶）');
+    ok(r.action === 'intercepted' && r.reason === 'suffix-empty' && r.hint?.strippedText === '' && segs(b).length === 0, 'RW2 纯缀 → intercepted(suffix-empty)，机械降级版为空', JSON.stringify(r));
+  }
+  // RW3 未命中任何拦截 → 照发，与不带标志一致
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw3.json', '没带缀的普通回复。');
+    ok(r.action === 'sent' && segs(b).length === 1, 'RW3 未命中拦截 → 照发', JSON.stringify(r));
+  }
+  // RW4/RW5 命中缀冷却但原文踩安全闸 → 不打回，照常整条丢弃（敏感草稿不进重写 prompt）
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw4.json', '路径在 C:\\Users\\someone\\secret 里。（喝茶）');
+    ok(r.action === 'dropped' && r.reason === 'audit-win-path' && segs(b).length === 0, 'RW4 缀命中但原文审计命中 → drop(audit)，不打回', JSON.stringify(r));
+  }
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw5.json', '加我 10000 详聊。（喝茶）');
+    ok(r.action === 'dropped' && r.reason === 'qq-leak', 'RW5 缀命中但原文含本号 QQ → drop(qq-leak)，不打回', JSON.stringify(r));
+  }
+  // RW6 OS 首段 → intercepted(os-head)
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw6.json', '被 @ 了，得回。\n新图金发紫瞳，真不是灯。\n但不装懂。');
+    ok(r.action === 'intercepted' && r.reason === 'os-head' && segs(b).length === 0, 'RW6 OS 首段 → intercepted(os-head)', JSON.stringify(r));
+    ok(r.hint?.strippedText === '新图金发紫瞳，真不是灯。\n但不装懂。' && r.hint?.originalText?.startsWith('被 @ 了'), 'RW6b hint：原文与剥段版', JSON.stringify(r.hint));
+  }
+  // RW7 不带标志：同样输入走机械降级（行为不变）
+  {
+    const b = calls.length;
+    const r = await outbound.processMessage({ text: '再来一口。（喝茶）' }, meta('950', 'rw7.json'));
+    ok(r.action === 'sent' && textOfR(b) === '再来一口。', 'RW7 不带标志：缀命中机械剥缀保正文', JSON.stringify(r));
+    const b7 = calls.length;
+    const r7 = await outbound.processMessage({ text: '被 @ 了，得回。\n正文内容。' }, meta('950', 'rw7b.json'));
+    ok(r7.action === 'sent' && textOfR(b7) === '正文内容。', 'RW7b 不带标志：OS 首段机械剥段保留', JSON.stringify(r7));
+  }
+  // RW8/RW9 顺序事实：窗口满时——缀命中仍先 intercepted（打回点在窗口检查之前）；
+  // OS 命中则先 defer（打回点在窗口检查之后，由投递层重试）
+  const maxWin = cfg.limits.maxRepliesPerGroupPer5Min;
+  cfg.limits.maxRepliesPerGroupPer5Min = 0; // 窗口即刻满
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw9.json', '再来一口。（喝茶）');
+    ok(r.action === 'intercepted' && r.reason === 'suffix-cooldown', 'RW8 缀命中 + 窗口满 → 仍 intercepted（先于窗口检查）', JSON.stringify(r));
+  }
+  {
+    const b = calls.length;
+    const r = await rw('950', 'rw8.json', '被 @ 了，得回。\n正文。');
+    ok(r.action === 'defer' && segs(b).length === 0, 'RW9 OS 命中 + 窗口满 → 先 defer（后于窗口检查）', JSON.stringify(r));
+  }
+  cfg.limits.maxRepliesPerGroupPer5Min = maxWin;
+
+  unlinkSync(join(STATE_ROOT, 'config.json')); // 还原默认
+}
+
 console.log(`\n结果: ${pass} 通过 / ${fail} 失败`);
 process.exit(fail ? 1 : 0);

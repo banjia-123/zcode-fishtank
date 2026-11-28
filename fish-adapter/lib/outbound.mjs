@@ -328,8 +328,11 @@ export function createOutbound(cfg, onebot, inboundState) {
     }
   }
 
-  // 核心：一条待发送内容的完整出站处理。meta = { chatType, chatId, userId, source, inboxFile? }
-  // 返回 { action: 'sent'|'dropped'|'error'|'defer', reason?, truncated?, inboxFile? }
+  // 核心：一条待发送内容的完整出站处理。meta = { chatType, chatId, userId, source, inboxFile?, rewriteable? }
+  // 返回 { action: 'sent'|'dropped'|'error'|'defer'|'intercepted', reason?, truncated?, inboxFile?, hint? }
+  // intercepted（2026-11-28 打回重写）：meta.rewriteable=true 且命中"可重写"的拦截（缀冷却/缀-only/OS 首段）
+  // 时不降级发送，改把 { originalText, strippedText, ... } 交给投递层去让模型重写（lib/deliver.mjs）。
+  // 默认不带 rewriteable——拦截一律走机械降级，行为与打回重写上线前逐字一致
   async function processMessage(raw, meta) {
     const batch = normalize(raw);
     const isNew = Array.isArray(batch.lines);
@@ -339,6 +342,8 @@ export function createOutbound(cfg, onebot, inboundState) {
     const chatId = meta.chatId != null ? String(meta.chatId) : null;
     const userId = meta.userId != null ? String(meta.userId) : null;
     const source = meta.source ?? 'http';
+    const rewriteable = meta.rewriteable === true;
+    let pendingIntercept = null; // 缀类拦截的打回信息：等原文过完 ②~④.5 安全闸再交出（见 ①.7 与交出点）
 
     const drop = (reason, extra = '') => {
       log('outbound', `dropped (${reason}) ${extra} [${source}]`);
@@ -423,11 +428,14 @@ export function createOutbound(cfg, onebot, inboundState) {
     // 剥掉正文语义无损）。config suffixGate {enabled, cooldownSec}；显式 0 = 关闭。
     // 双路剥除：isNew 发送走 textLines（行数组）、老格式走 text——只剥一处会漏（SF2 实测）
     const sGate = suffixGateState();
+    const suffixHits = []; // 本条命中冷却的缀（打回模式随 intercepted 上报）
+    const beforeSuffix = text;
     if (sGate.enabled && sGate.cooldownSec > 0) {
       const stripRow = (row) => {
         for (const m of [...row.matchAll(ACTION_SUFFIX)]) {
           if (sameSuffixRecentlyUsed(cfg, chatKey, m[1], sGate.cooldownSec)) {
-            log('outbound', `suffix cooldown: ${chatKey} "（${m[1]}）" ${sGate.cooldownSec}s 内已用过——剥缀保正文`);
+            suffixHits.push(m[1]);
+            log('outbound', `suffix cooldown: ${chatKey} "（${m[1]}）" ${sGate.cooldownSec}s 内已用过——${rewriteable ? '打回重写' : '剥缀保正文'}`);
             row = row.replace(m[0], '');
           }
         }
@@ -435,6 +443,17 @@ export function createOutbound(cfg, onebot, inboundState) {
       };
       if (isNew) { textLines = textLines.map(stripRow); text = textLines.join('\n'); }
       else text = stripRow(text);
+    }
+    if (rewriteable && suffixHits.length) {
+      // 打回模式：不剥不发。原文（含冷却中的缀）继续往下过 ②~④.5 安全闸，全过才在交出点返回
+      // intercepted——敏感草稿（审计/禁词/QQ 泄露命中）永远不打回、不进重写 prompt。
+      // strippedText = 机械剥缀版（投递层重写失败时的兜底；整条只有缀时为空串）
+      pendingIntercept = {
+        action: 'intercepted',
+        reason: text.trim() ? 'suffix-cooldown' : 'suffix-empty',
+        hint: { originalText: beforeSuffix, strippedText: text, suffixes: [...suffixHits] },
+      };
+      text = beforeSuffix;
     }
 
     if (!text.trim() && !emojiPath) return drop('empty');
@@ -484,6 +503,10 @@ export function createOutbound(cfg, onebot, inboundState) {
       auditAlert('leak', 'private-ip', joined, chatKey);
       return drop('audit-private-ip');
     }
+
+    // 打回交出点（2026-11-28）：缀类拦截且原文已过 ②~④.5 全部安全闸——到这里说明草稿不敏感，
+    // 交给投递层重写。不发送、不占额度（⑤.5 预占在后面）
+    if (pendingIntercept) return pendingIntercept;
 
     // ⑤ 限额（D13：计数器已落盘，重启不清零）：daily 兜底 / 单条消息回复数 / 每群主动消息频率 / 滚动窗口
     if (daily !== dayKey()) { daily = dayKey(); dailyCount = 0; saveCounters(); }
@@ -537,9 +560,17 @@ export function createOutbound(cfg, onebot, inboundState) {
         ? (cfg.limits?.busyMaxSegments ?? 2)
         : (cfg.limits?.maxSegments ?? 4);
       const raw = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, maxSegs);
-      // OS 首段剥除：首段是"被 @ 了/得回"这类内心 OS 时去掉（正文在后续段）；新格式 lines 同样过这道
-      const cleaned = stripOsHead(raw.join('\n'), chatKey);
-      if (cleaned !== raw.join('\n')) {
+      // OS 首段剥除：首段是"被 @ 了/得回"这类内心 OS 时去掉（正文在后续段）。
+      // （注：只有老格式过这道；新格式 lines 取 textLines 直发——旧注释写"同样过"与代码不符，挂账待清）
+      const rawJoined = raw.join('\n');
+      const cleaned = stripOsHead(rawJoined, chatKey);
+      if (cleaned !== rawJoined) {
+        // 打回模式：内心 OS 混进首段 → 交出重写。原文此时已过 ②~⑤ 全部闸（含限额窗口）；
+        // intercepted 不发送、⑤.5 预占在其后——额度未占。窗口满时到不了这里（上面已先返回 defer）
+        if (rewriteable) {
+          log('outbound', `os-head intercepted → ${chatKey}（打回重写）`);
+          return { action: 'intercepted', reason: 'os-head', hint: { originalText: text, strippedText: cleaned } };
+        }
         const kept = cleaned.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, maxSegs);
         if (kept.length) { raw.length = 0; raw.push(...kept); }
       }

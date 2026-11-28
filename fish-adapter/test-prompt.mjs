@@ -206,6 +206,29 @@ try {
   const long15 = Array.from({ length: 30 }, (_, i) => ({ role: 'user', text: '消息' + i }));
   const p15 = buildTestPrompt({}, long15, '本条', { personaDir: dir });
   ok(!p15.includes('消息0') && p15.includes('消息10') && p15.includes('主人：本条'), 'P15 历史截断至最近 20 轮', (p15.match(/消息\d+/g) ?? []).slice(-3).join(','));
+
+  // P18 打回重写报文（2026-11-28）：draft/intercept 给出时任务段换成"带原因重写"，草稿带边界附在
+  // 消息段之后；persona/输出规则/消息段照常保留。不给 draft 时与原报文逐字一致
+  const msgs18 = [mkMsg('<group_message from="阿明" uid="1">猫好圆</group_message>')];
+  const ice = (reason, hint = {}) => ({ action: 'intercepted', reason, hint });
+  const p18a = buildPrompt({}, msgs18, { personaDir: dir, draft: '这猫圆得有底气。（喝茶）', intercept: ice('suffix-cooldown', { suffixes: ['喝茶'] }) });
+  ok(p18a.includes('写了一版回复，但没发出去——需要重写一版'), 'P18a 任务段换成重写说明');
+  ok(p18a.includes('【为什么没发出去】草稿里的动作缀（喝茶）几分钟前刚用过'), 'P18b 原因句带具体缀名');
+  ok(p18a.includes('去掉这个缀') && p18a.includes('直接输出重写后的回复正文'), 'P18c 重写要求含针对原因的做法');
+  ok(p18a.includes('【你刚才的草稿（没发出去的那版）】\n这猫圆得有底气。（喝茶）\n【草稿结束】'), 'P18d 草稿带边界附在报文里');
+  ok(p18a.indexOf('【消息结束】') < p18a.indexOf('【你刚才的草稿'), 'P18e 草稿在消息段之后（不破坏不可信边界）');
+  ok(p18a.includes('你是伊丽莎白，毒舌小女仆。') && p18a.includes('<group_message from="阿明"') && p18a.includes('【输出规则（严格遵守）】'), 'P18f persona / 消息段 / 输出规则照常保留');
+  ok(!p18a.includes('判断要不要接话、怎么接'), 'P18g 原任务句不出现');
+  ok((p18a.match(/以下是 QQ 消息/g) ?? []).length === 1 && (p18a.match(/消息结束/g) ?? []).length === 1, 'P18h 不可信边界声明仍只一层');
+  const p18b = buildPrompt({}, msgs18, { personaDir: dir, draft: '（喝茶）', intercept: ice('suffix-empty', { suffixes: ['喝茶'] }) });
+  ok(p18b.includes('整条只有动作缀（喝茶）、没有正文') && p18b.includes('把真正想说的那句话写出来'), 'P18i suffix-empty 原因与做法');
+  const p18c = buildPrompt({}, msgs18, { personaDir: dir, draft: '被 @ 了，得回。\n正文。', intercept: ice('os-head') });
+  ok(p18c.includes('内心独白') && p18c.includes('直接从正文开始写'), 'P18j os-head 原因与做法');
+  const p18d = buildPrompt({}, msgs18, { personaDir: dir, draft: 'x', intercept: ice('who-knows') });
+  ok(p18d.includes('草稿不符合发送要求') && p18d.includes('换一种写法'), 'P18k 未知 reason 走通用文案，不炸');
+  const base18 = buildPrompt({}, msgs18, { personaDir: dir });
+  ok(base18 === buildPrompt({}, msgs18, { personaDir: dir }), 'P18l 不给 draft 时输出与原报文逐字一致');
+  ok(!base18.includes('重写') && !base18.includes('草稿'), 'P18m 原报文不含重写相关字样');
 } finally {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败无妨（临时目录） */ }
 }

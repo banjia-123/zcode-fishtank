@@ -1,8 +1,10 @@
 // 出站投递恢复层测试（2026-11-28）：lib/deliver.mjs 是纯逻辑、依赖全注入，直接单测。
 // Part A 覆盖 defer 重试：默认延迟表 / 首试成功 / 第二档成功 / 两档均满耗尽 / 其他 action 透传 /
 //       process 抛错不炸 / onDone 恰好一次 / cancel（含入队回调竞态）/ 自定义延迟表
+// Part B 覆盖打回重写矩阵：直接发出 / 拦截→重写成功 / 重写拿不到正文→兜底机械降级 /
+//       缀-only 兜底丢弃 / 开关关闭 / 重写版被拦或延后时透传
 // 跑法：node test-deliver.mjs，退出码 0 = 全过
-import { scheduleDeferRetry, DEFER_RETRY_DELAYS_MS } from './lib/deliver.mjs';
+import { scheduleDeferRetry, deliverWithRecovery, DEFER_RETRY_DELAYS_MS } from './lib/deliver.mjs';
 
 let pass = 0, fail = 0;
 const ok = (cond, name, extra = '') => {
@@ -135,6 +137,118 @@ ok(Array.isArray(DEFER_RETRY_DELAYS_MS) && DEFER_RETRY_DELAYS_MS.join() === '900
   ok(t.queue[0].ms === 1_000, 'DV10 自定义延迟表生效');
   await t.fire();
   ok(t.queue.length === 1, 'DV10b 单档表耗尽后不再排程');
+}
+
+// ———— 打回重写矩阵 ————
+// 假 process：按序返回结果，记录每次收到的 (text, extra)
+function recProcess(results) {
+  const seen = [];
+  let i = 0;
+  const fn = async (text, extra) => { seen.push({ text, extra }); const r = results[i++]; if (r instanceof Error) throw r; return r; };
+  fn.seen = seen;
+  return fn;
+}
+const ICE = (reason, hint = {}) => ({ action: 'intercepted', reason, hint });
+const SENT = { action: 'sent' };
+const ICE_SFX = ICE('suffix-cooldown', { originalText: '带缀原稿', strippedText: '剥缀版', suffixes: ['喝茶'] });
+
+// DR1 首调直接发出 → 不调 rewrite
+{
+  const p = recProcess([SENT]);
+  let rewriteCalls = 0;
+  const r = await deliverWithRecovery({ process: p, rewrite: async () => { rewriteCalls++; return { content: 'x' }; }, text: '原稿' });
+  ok(p.seen.length === 1 && p.seen[0].text === '原稿' && p.seen[0].extra?.rewriteable === true, 'DR1a 首调带 rewriteable 投原文', JSON.stringify(p.seen));
+  ok(r.out === SENT && r.finalText === '原稿' && r.rewritten === false && rewriteCalls === 0, 'DR1b 直接发出：不调 rewrite，finalText=原文');
+}
+
+// DR2 拦截 → 重写成功 → 发重写版
+{
+  const p = recProcess([ICE_SFX, SENT]);
+  const got = [];
+  const logs = [];
+  const r = await deliverWithRecovery({
+    process: p,
+    rewrite: async (draft, ice) => { got.push({ draft, reason: ice.reason, tics: ice.hint.suffixes }); return { content: '重写版' }; },
+    text: '带缀原稿',
+    log: (m) => logs.push(m),
+  });
+  ok(got.length === 1 && got[0].draft === '带缀原稿' && got[0].reason === 'suffix-cooldown' && got[0].tics.join() === '喝茶', 'DR2a rewrite 收到原文与拦截信息', JSON.stringify(got));
+  ok(p.seen.length === 2 && p.seen[1].text === '重写版' && p.seen[1].extra === undefined, 'DR2b 重写版再投，且不带 rewriteable（仍拦则机械降级，不循环）', JSON.stringify(p.seen[1]));
+  ok(r.out === SENT && r.finalText === '重写版' && r.rewritten === true, 'DR2c 发的是重写版', JSON.stringify(r));
+  ok(logs.some((l) => l.includes('发重写版')), 'DR2d 留痕');
+}
+
+// DR3 重写拿不到正文（沉默 / 失败 / 跳过 / 空）→ 兜底发机械降级版
+for (const [name, rwResult, expectLog] of [
+  ['沉默', { silent: true }, 'silent'],
+  ['失败', { error: 'timeout' }, 'error: timeout'],
+  ['跳过', { skipped: true, reason: 'limit-daily-wakes(100)' }, 'skipped: limit-daily-wakes(100)'],
+  ['空响应', { content: '   ' }, '空响应'],
+]) {
+  const p = recProcess([ICE_SFX, SENT]);
+  const logs = [];
+  const r = await deliverWithRecovery({ process: p, rewrite: async () => rwResult, text: '带缀原稿', log: (m) => logs.push(m) });
+  ok(p.seen[1]?.text === '剥缀版' && r.out === SENT && r.finalText === '剥缀版' && r.rewritten === false, `DR3 重写${name} → 兜底发机械降级版`, JSON.stringify(p.seen.map((c) => c.text)));
+  ok(logs.some((l) => l.includes('没拿到正文') && l.includes(expectLog)) && logs.some((l) => l.includes('兜底发机械降级版')), `DR3${name}b 留痕原因与兜底`, logs.join(' | '));
+}
+
+// DR4 rewrite 抛错 / 未提供 → 兜底
+{
+  const p = recProcess([ICE_SFX, SENT]);
+  const logs = [];
+  const r = await deliverWithRecovery({ process: p, rewrite: async () => { throw new Error('boom'); }, text: '带缀原稿', log: (m) => logs.push(m) });
+  ok(r.out === SENT && r.finalText === '剥缀版' && logs.some((l) => l.includes('重写调用异常（boom）')), 'DR4 rewrite 抛错 → 兜底发机械降级版', logs.join(' | '));
+  const p2 = recProcess([ICE_SFX, SENT]);
+  const r2 = await deliverWithRecovery({ process: p2, text: '带缀原稿' });
+  ok(r2.out === SENT && r2.finalText === '剥缀版', 'DR4b 未提供 rewrite → 兜底发机械降级版');
+}
+
+// DR5 缀-only（机械降级版为空）且重写失败 → 丢弃，不重投
+{
+  const p = recProcess([ICE('suffix-empty', { originalText: '（喝茶）', strippedText: '' })]);
+  const logs = [];
+  const r = await deliverWithRecovery({ process: p, rewrite: async () => ({ error: 'x' }), text: '（喝茶）', log: (m) => logs.push(m) });
+  ok(p.seen.length === 1, 'DR5a 缀-only 重写失败 → 不重投（没有可发的正文）', `process=${p.seen.length}`);
+  ok(r.out.action === 'dropped' && r.out.reason === 'empty' && r.out.intercepted === 'suffix-empty', 'DR5b 结果=丢弃，带上拦截原因', JSON.stringify(r.out));
+  ok(logs.some((l) => l.includes('无正文 → 丢弃')), 'DR5c 留痕');
+}
+
+// DR6 缀-only 但重写成功 → 发重写版（内容被救活）
+{
+  const p = recProcess([ICE('suffix-empty', { originalText: '（喝茶）', strippedText: '' }), SENT]);
+  const r = await deliverWithRecovery({ process: p, rewrite: async () => ({ content: '这猫是真圆。' }), text: '（喝茶）' });
+  ok(r.out === SENT && r.finalText === '这猫是真圆。' && r.rewritten === true, 'DR6 缀-only 重写成功 → 发重写版');
+}
+
+// DR7 开关关闭：首调不带 rewriteable、不调 rewrite（拦截在出站层机械降级，与上线前逐字一致）
+{
+  const p = recProcess([SENT]);
+  let rewriteCalls = 0;
+  await deliverWithRecovery({ process: p, rewrite: async () => { rewriteCalls++; return {}; }, text: 'x', rewriteEnabled: false });
+  ok(p.seen[0].extra === undefined && rewriteCalls === 0, 'DR7 开关关闭：首调不带 rewriteable，不调 rewrite');
+  const p2 = recProcess([ICE('os-head', { originalText: 'o', strippedText: '剥段版' }), SENT]);
+  const r2 = await deliverWithRecovery({ process: p2, rewrite: async () => ({ content: '不该被调' }), text: 'o', rewriteEnabled: false });
+  ok(r2.out === SENT && r2.finalText === '剥段版', 'DR7b 关闭状态下若仍 intercepted → 不重写，直接兜底');
+}
+
+// DR8 重写版被出站延后/丢弃 → 结果透传（defer 由 Part A 的重试接手），finalText=重写版
+{
+  const deferred = { action: 'defer', reason: 'limit-window' };
+  const p = recProcess([ICE_SFX, deferred]);
+  const r = await deliverWithRecovery({ process: p, rewrite: async () => ({ content: '重写版' }), text: '带缀原稿' });
+  ok(r.out === deferred && r.finalText === '重写版', 'DR8 重写版被 defer → 透传，finalText=重写版', JSON.stringify(r));
+  const dropped = { action: 'dropped', reason: 'limit-daily' };
+  const p2 = recProcess([ICE_SFX, dropped]);
+  const r2 = await deliverWithRecovery({ process: p2, rewrite: async () => ({ content: '重写版' }), text: '带缀原稿' });
+  ok(r2.out === dropped && r2.rewritten === true, 'DR8b 重写版被丢弃 → 透传');
+}
+
+// DR9 hint 缺 originalText → rewrite 收到首调原文；hint 整个缺失也不炸
+{
+  const p = recProcess([{ action: 'intercepted', reason: 'suffix-cooldown' }, SENT]);
+  let gotDraft = null;
+  const r = await deliverWithRecovery({ process: p, rewrite: async (draft) => { gotDraft = draft; return { content: '重写版' }; }, text: '首调原文' });
+  ok(gotDraft === '首调原文' && r.out === SENT, 'DR9 hint 缺失时 rewrite 收到首调原文，不炸', JSON.stringify({ gotDraft }));
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILED'}：${pass} 通过 / ${fail} 失败`);

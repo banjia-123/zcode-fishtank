@@ -124,7 +124,34 @@ function nowLine(now = new Date()) {
   return `【现在】${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} 周${week} ${pad(now.getHours())}:${pad(now.getMinutes())}（时间用来对作息和语境，不用刻意提）`;
 }
 
-export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
+// 打回重写反馈（2026-11-28）：出站拦截（lib/outbound 的 intercepted：缀冷却/缀-only/OS 首段）→
+// 任务段换成"带着原因重写"，草稿附在消息段之后。persona/规则/记忆/消息段照常——重写需要同样的语境。
+// 原因句与做法要具体：对 Flash 档，"重写一版"不够，得说清楚哪里不行、该怎么改。
+// draft 是模型自己的上一版输出（非群友输入），且重写版照样走完整出站闸链——这里只管把话说清楚
+const REWRITE_WHY = {
+  'suffix-cooldown': (t) => `草稿里的动作缀${t}几分钟前刚用过。同一个缀连着出现就是复读机。`,
+  'suffix-empty': (t) => `草稿整条只有动作缀${t}、没有正文。群友看到的只是一句括号，不知道你想说什么。`,
+  'os-head': () => '草稿开头混进了内心独白（"被 @ 了""得回"这类）。那是你收到消息后的处理过程，群友看不到也不该看到。',
+};
+const REWRITE_HOW = {
+  'suffix-cooldown': '去掉这个缀，用文字本身把语气写出来；实在想带动作就换一个贴切的，或者干脆不带',
+  'suffix-empty': '把真正想说的那句话写出来',
+  'os-head': '直接从正文开始写，独白一个字都不要',
+};
+export function rewriteFeedback(draft, intercept) {
+  const reason = String(intercept?.reason ?? '');
+  const known = Object.hasOwn(REWRITE_WHY, reason);
+  const tics = (Array.isArray(intercept?.hint?.suffixes) ? intercept.hint.suffixes : []).map((s) => `（${s}）`).join('');
+  return {
+    why: known ? REWRITE_WHY[reason](tics) : '草稿不符合发送要求。',
+    how: known ? REWRITE_HOW[reason] : '换一种写法，把想说的意思重新表达一遍',
+    draft: String(draft ?? '').trim(),
+  };
+}
+
+// draft/intercept（可选）：给出时合成"打回重写"报文（上一版草稿被出站拦截，见 rewriteFeedback）；
+// 不给时与打回重写上线前逐字一致
+export function buildPrompt(cfg, batch, { personaDir, chatKey, draft, intercept }) {
   const persona = loadPersona(cfg, personaDir);
 
   const segs = [];
@@ -150,10 +177,18 @@ export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
   const notes = chatKey ? renderNotes(chatKey) : '';
   const emojiText = emojiDigest(personaDir);
 
+  const fb = draft != null ? rewriteFeedback(draft, intercept) : null;
   return [
     persona,
     '',
-    '【任务】以上是你的人格设定。你在 QQ 里，下面是刚收到的一批消息。判断要不要接话、怎么接。',
+    fb ? [
+      '【任务】以上是你的人格设定。你刚才针对下面这批消息写了一版回复，但没发出去——需要重写一版。',
+      `【为什么没发出去】${fb.why}`,
+      '【重写要求】',
+      '- 意思基本不变，只解决上面这一个问题；别道歉、别解释、别提"重写"这回事',
+      `- ${fb.how}`,
+      '- 直接输出重写后的回复正文',
+    ].join('\n') : '【任务】以上是你的人格设定。你在 QQ 里，下面是刚收到的一批消息。判断要不要接话、怎么接。',
     '',
     '【输出规则（严格遵守）】',
     '- 想说话就直接输出回复正文，不要任何前言、引号、解释',
@@ -203,6 +238,7 @@ export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
     segs.length ? segs.join('\n\n') : '【警告：本批次没有解析出任何消息段（格式异常）——没有可回复的内容，输出 [SILENT]】',
     '',
     '【消息结束】',
+    fb ? ['', '【你刚才的草稿（没发出去的那版）】', fb.draft, '【草稿结束】'].join('\n') : '',
   ].filter((x) => x !== '').join('\n');
 }
 

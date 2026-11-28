@@ -157,6 +157,11 @@ const baseCfg = {
   // must 批次豁免最小间隔（有人叫她必须回；间隔闸是防闲聊刷屏的）
   const r3 = await safe.wakeSafe('g:i', 'FAKE:OK', { batchId: 'i3', msgs: 1, must: true });
   ok(r3.content === 'OK', 'W10b must 批次豁免最小间隔（@消息紧跟也必唤醒）', JSON.stringify(r3).slice(0, 100));
+  // 打回重写豁免最小间隔（2026-11-28）：重写紧跟首调必 <20s，不豁免就永远被拦；dailyWakes 照计（真调用）
+  const wakesBefore = safe.stats().dailyWakes;
+  const r4 = await safe.wakeSafe('g:i', 'FAKE:OK', { batchId: 'i4', msgs: 1, rewrite: true });
+  ok(r4.content === 'OK', 'W10c 打回重写豁免最小间隔', JSON.stringify(r4).slice(0, 100));
+  ok(safe.stats().dailyWakes === wakesBefore + 1, 'W10d 重写照常计入 dailyWakes', `before=${wakesBefore} after=${safe.stats().dailyWakes}`);
   client.stop();
 }
 

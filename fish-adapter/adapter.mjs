@@ -13,7 +13,7 @@ import { OneBotClient } from './lib/onebot.mjs';
 import { createInbound, dedupHas } from './lib/inbound.mjs';
 import { createOutbound, shouldQuoteDecision } from './lib/outbound.mjs';
 import { createPeers } from './lib/peer.mjs';
-import { scheduleDeferRetry } from './lib/deliver.mjs';
+import { deliverWithRecovery, scheduleDeferRetry } from './lib/deliver.mjs';
 import { poolExtrasFor, sortByNewest } from './lib/imgpool.mjs';
 import { createAppServerClient, DENY_ALL } from './wake/app-server.mjs';
 import { createWakeSafe } from './wake/safe.mjs';
@@ -204,22 +204,39 @@ if (PATROL) {
       replyToMessageId: quote ? mustMsg.messageId : null,
       source: 'patrol',
     };
-    const out = await outbound.processMessage({ text: r.content }, outMeta);
+    // 投递（lib/deliver.mjs）：原出站链路审计/限额/表情/分段一道不绕，外面多两层恢复——
+    // ① 打回重写（2026-11-28）：草稿被缀冷却/缀-only/OS 首段拦下 → 带着原因让模型重写一版，
+    //    拿不到重写正文才降级到原来的机械处理；开关 config.rewrite.enabled（缺省开）
+    // ② defer 延迟重试：见下方
+    const { out, finalText } = await deliverWithRecovery({
+      process: (text, extra) => outbound.processMessage({ text }, extra ? { ...outMeta, ...extra } : outMeta),
+      rewrite: (draft, intercept) => wakeSafe(chatKey, buildPrompt(cfg, batch, { personaDir: P_DIR, chatKey, draft, intercept }), {
+        batchId: `${info.batchId}-rw`,
+        msgs: batch.length,
+        must: Boolean(mustMsg.must),
+        attachments,
+        rewrite: true, // 豁免最小间隔（紧跟首调必 <20s）。不带 hadTier2：tier2 退避首调已结算，不重复
+      }),
+      rewriteEnabled: cfg.rewrite?.enabled !== false,
+      text: r.content,
+      log: (m) => log('patrol', `batch=${info.batchId} ${m}`),
+    });
     log('patrol', `batch=${info.batchId} msgs=${batch.length} → 出站 ${out.action}（${r.modelMs}ms）`);
-    // S3.1：鱼的回复也记便签（sent 才记——[SILENT]/被审计丢弃的不进，否则它看不到自己说过什么）
+    // S3.1：鱼的回复也记便签（sent 才记——[SILENT]/被审计丢弃的不进，否则它看不到自己说过什么）。
+    // 记 finalText：被拦后发的是重写版或机械降级版，便签要贴近实际说出去的话
     const noteKind = last.chatType === 'private' ? 'private' : 'group';
-    const noteSent = () => appendNote(chatKey, noteKind, { from: cfg.botName || '鱼', uid: 'bot', text: r.content });
+    const noteSent = () => appendNote(chatKey, noteKind, { from: cfg.botName || '鱼', uid: 'bot', text: finalText });
     if (out.action === 'sent') {
       noteSent();
     } else if (out.action === 'defer') {
       // defer 补偿重试（2026-11-28）：限额窗口满的批次此前在这里被直接废弃——"错峰延后，不丢"是
       // outbox 轮询时代的语义，切除 outbox 后没人重发，当天静默丢了 7 条高峰回复。现排入延迟重试
       // （90s / 150s 两档，lib/deliver.mjs），窗口滑走即发出；耗尽才丢弃。fire-and-forget：不阻塞
-      // flush handler，timer 已 unref 不挂住进程退出
+      // flush handler，timer 已 unref 不挂住进程退出。重试不带 rewriteable：这条链路里没人接 intercepted
       log('patrol', `batch=${info.batchId} 限额窗口满，已排入延迟重试`);
       scheduleDeferRetry({
         process: (text) => outbound.processMessage({ text }, outMeta),
-        text: r.content,
+        text: finalText,
         log: (m) => log('patrol', m),
         tag: ` batch=${info.batchId}`,
         onDone: (res) => { if (res.action === 'sent') noteSent(); },
