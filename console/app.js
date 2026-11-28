@@ -69,7 +69,7 @@ function route() {
   if (page === 'send') loadSend().catch(() => {});
   if (page === 'chattest') loadChatTest().catch(() => {});
   if (page === 'emoji') loadEmoji().catch(() => {});
-  if (page === 'ops') loadOps().catch(() => {});
+  if (page === 'ops') { loadOps().catch(() => {}); loadBackupStatus().catch(() => {}); }
   if (page === 'automations') { loadAutomations().catch(() => {}); loadDiary().catch(() => {}); }
 }
 window.addEventListener('hashchange', route);
@@ -1341,6 +1341,37 @@ async function loadOps() {
   $('#prune-go').disabled = true;
   $('#prune-out').textContent = '';
 }
+
+// ── 数据备份（2026-11-28）：立即备份按钮 + 状态行 ──
+async function loadBackupStatus() {
+  try {
+    const r = await api('/api/backup');
+    const d = r.data;
+    const fmt = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)}M` : `${Math.round(n / 1024)}K`;
+    $('#bk-out').textContent = d.latest
+      ? `最近快照 ${d.latest.snapshot}（${d.latest.count} 文件 · ${fmt(d.latest.bytes)}）· 保留 ${d.snapshots.length}/${d.keep} 份`
+      : '还没有快照——点「立即备份」生成第一份';
+  } catch (e) {
+    $('#bk-out').textContent = '状态读取失败：' + e.message;
+  }
+}
+
+$('#bk-run').addEventListener('click', async () => {
+  const b = $('#bk-run');
+  if (b.disabled) return;
+  b.disabled = true;
+  $('#bk-out').textContent = '打包中…';
+  try {
+    const r = await api('/api/backup/run', { method: 'POST', timeoutMs: 70_000 });
+    const d = r.data;
+    const fmt = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)}M` : `${Math.round(n / 1024)}K`;
+    toast(`备份完成：${d.files} 文件 ${fmt(d.totalBytes)}`);
+    await loadBackupStatus();
+  } catch (e) {
+    toast('备份失败：' + e.message);
+    $('#bk-out').textContent = '失败——' + e.message;
+  } finally { b.disabled = false; }
+});
 
 $('#ops-refresh').addEventListener('click', () => { loadOps().then(() => toast('已刷新')).catch((e) => toast(e.message)); });
 $('#prune-preview').addEventListener('click', async () => {

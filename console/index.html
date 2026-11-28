@@ -422,6 +422,20 @@
       </div>
 
       <div class="card" style="margin-top:12px">
+        <div class="card-head"><h2>数据备份</h2><span class="hint">鱼的全量快照（记忆/日记/表情/聊天史）→ fishpond-backup，保留 14 份</span></div>
+        <div class="card-body">
+          <div style="font-size:10.5px;color:#54656e;line-height:1.7;margin-bottom:10px">
+            每日 04:30 自动打包（任务计划 <code>zcode-fishtank-backup</code>）；config.json 含密钥<b>明确不备</b>（盘坏后重配 token）。
+            恢复步骤见 fish-adapter/README「备份与恢复」——游标必须与 chat.jsonl 成对恢复。
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn" id="bk-run">立即备份</button>
+            <span class="send-meta" id="bk-out"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
         <div class="card-head"><h2>会话清理</h2><span class="hint">清掉鱼缸在 ZCode 里的残缺会话条目（删前归档）</span></div>
         <div class="card-body">
           <div style="font-size:10.5px;color:#54656e;line-height:1.7;margin-bottom:10px">

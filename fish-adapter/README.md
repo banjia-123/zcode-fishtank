@@ -76,6 +76,18 @@ inbox 仅做留档与滚动清理。webhook 链路（POST ZCode `/api/bots/webho
 6. **热读缓存**：config/persona/名册等热文件全部 mtime 缓存（mtimeNs+size 双键）——改完
    文件即刻生效无需重启，但同毫秒内二次覆写同一文件在测试里要注意（现键已根治撞车）。
 
+## 备份与恢复（2026-11-28）
+
+**每日 04:30 自动快照**（任务计划 `zcode-fishtank-backup` → `备份.cmd` → `backup.mjs --run`）到 `工作区/fishpond-backup/backup-YYYY-MM-DD/`，保留 14 份；控制台运维页可手动「立即备份」。
+
+- **备份内容**（白名单式，`--list` 可自查）：`fishpond/memory/**`（记忆/行话/名册/游标/队列/全部 .bak）、`persona.md`、`diary/**`、`emojis/**`、`.learner-prompt.md`/`.diary-prompt.md`、`fishpond/logs/**`（chat.jsonl 聊天史 / speak.jsonl 冷却+统计源）、`fishpond/state/**`（便签）、`fish-adapter/logs/` 留痕本体（wake.jsonl/audit.log/sessions.jsonl/diary-deleted.jsonl/chat-test.jsonl）+ 每份快照带 `manifest.json`（文件清单/字节数）
+- **明确不备**：`config.json` 与 `fish-adapter/backups/`（含 NapCat token 与各厂商 key——密钥不落第二处，盘坏后重配 token 约 5 分钟）；attachments/.inbox/.outbox（短缓存）；adapter.log/wake-trace.jsonl（可丢大日志）
+- **恢复（灾难手册）**：
+  1. 重装 ZCode/NapCat/适配器（仓库克隆 + config.example.json 重填 token）
+  2. 从快照按原相对路径覆盖回：`fishpond/**` → `fishpond/`，`fish-adapter/logs/**` → `fish-adapter/logs/`
+  3. ⚠️ **`.learner-cursor`/`.diary-cursor` 必须与 `chat.jsonl` 成对恢复**——游标是 chat.jsonl 的绝对行号，单恢复一边会漂移：游标新于聊天史=永远追不上学习积压；游标旧于聊天史=重复提炼旧消息
+- **局限（诚实声明）**：C:/D: 是同一块物理盘——本备份防误删/防分区损坏，**不防整盘死**。`backup.mjs --run --dest <外置盘目录>` 预留了第二目的地参数，插外置盘加一行任务计划即可升级为异地容灾。
+
 ## 安全设计（fail-closed 清单）
 
 - `allowAllWhenEmpty` 必须为 `false`，启动强制校验；`allow.groups/private` 形状校验（缺/坏拒绝启动）

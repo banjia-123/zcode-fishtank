@@ -702,6 +702,32 @@ const REVIEW_KINDS = {
 };
 const normalizeKind = (k) => (REVIEW_KINDS[k] ? k : 'memory');
 
+// ── 数据备份（2026-11-28）：spawn fish-adapter/backup.mjs --run / 读快照目录状态 ──
+function apiBackupStatus() {
+  const dir = join(PKG_ROOT, 'fishpond-backup');
+  let names = [];
+  try { names = readdirSync(dir).filter((n) => /^backup-\d{4}-\d{2}-\d{2}$/.test(n)).sort(); } catch { /* 首跑无目录 */ }
+  const snapshots = names.map((n) => {
+    let bytes = 0, count = 0;
+    try { const m = JSON.parse(readFileSync(join(dir, n, 'manifest.json'), 'utf8')); bytes = m.totalBytes; count = m.count; } catch { /* 旧式目录 */ }
+    return { snapshot: n, bytes, count };
+  });
+  return { dest: dir, keep: 14, snapshots, latest: snapshots.at(-1) ?? null };
+}
+
+async function apiBackupRun() {
+  const r = await new Promise((resolve) => {
+    execFile(process.execPath, [join(ADAPTER_DIR, 'backup.mjs'), '--run', '--json'], {
+      cwd: ADAPTER_DIR, timeout: 60_000, windowsHide: true,
+    }, (err, stdout, stderr) => {
+      if (err) { resolve({ ok: false, error: `备份脚本退出 ${err.code ?? '?'}：${String(stderr || err.message).split('\n')[0].slice(0, 200)}` }); return; }
+      try { resolve(JSON.parse(stdout)); } catch { resolve({ ok: false, error: '备份脚本输出不是 JSON' }); }
+    });
+  });
+  if (!r.ok) throw httpErr(500, 'E_BACKUP', r.error ?? '备份失败');
+  return { ...r, status: apiBackupStatus() };
+}
+
 // GET /api/review/memory|vocab|roster：候选列表（脚本 --list 纯读）+ 同 kind 删除提案（G5b 合并进候选区）
 async function apiReviewList(kind) {
   const K = REVIEW_KINDS[kind];
@@ -1874,6 +1900,8 @@ const server = createServer((req, res) => {
         if (emMatch && req.method === 'GET') { serveEmojiFile(decodeURIComponent(emMatch[1]), res); return; }
         if (emMatch && req.method === 'DELETE') return route(() => apiEmojiDelete(decodeURIComponent(emMatch[1])));
         if (url === '/api/ops' && req.method === 'GET') return route(() => apiOps());
+        if (url === '/api/backup' && req.method === 'GET') return route(() => apiBackupStatus());
+        if (url === '/api/backup/run' && req.method === 'POST') return route(() => apiBackupRun());
         if (url === '/api/automations' && req.method === 'GET') return route(() => apiAutomations());
         if (url === '/api/tasks/run' && req.method === 'POST') return route(() => readBody().then(apiTaskRun));
         if (url === '/api/tasks/status' && req.method === 'GET') return route(() => apiTaskStatus());
