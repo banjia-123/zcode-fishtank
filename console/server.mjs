@@ -712,7 +712,14 @@ function apiBackupStatus() {
     try { const m = JSON.parse(readFileSync(join(dir, n, 'manifest.json'), 'utf8')); bytes = m.totalBytes; count = m.count; } catch { /* 旧式目录 */ }
     return { snapshot: n, bytes, count };
   });
-  return { dest: dir, keep: 14, snapshots, latest: snapshots.at(-1) ?? null };
+  // 距上次备份天数（从快照名解析——人工节奏的"忘记防线"，前端 ≥3 天警示）
+  let daysSinceLast = null;
+  const latestName = snapshots.at(-1)?.snapshot;
+  if (latestName) {
+    const mdate = latestName.match(/backup-(\d{4})-(\d{2})-(\d{2})/);
+    if (mdate) daysSinceLast = Math.max(0, Math.floor((Date.now() - new Date(Number(mdate[1]), Number(mdate[2]) - 1, Number(mdate[3])).getTime()) / 86_400_000));
+  }
+  return { dest: dir, keep: 14, snapshots, latest: snapshots.at(-1) ?? null, daysSinceLast };
 }
 
 async function apiBackupRun() {

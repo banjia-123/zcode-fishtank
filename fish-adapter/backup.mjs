@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// 鱼塘数据备份（2026-11-28）：每日全量快照 —— 硬盘坏 = 记忆清零的最后防线
+// 鱼塘数据备份（2026-11-28）：全量快照 —— 硬盘坏 = 记忆清零的最后防线
+// 节奏：人工触发（2026-11-28 用户裁决撤掉每日任务计划）——控制台「立即备份」/ 双击 备份.cmd；
+//       控制台状态行显示"距上次备份 N 天"（≥3 天警示色）作为忘记防线。想恢复自动随时 --install
 // 用法：
 //   node backup.mjs --run [--json] [--dest <dir>]  打包当日快照 + 轮转（--json 供控制台 spawn）
 //   node backup.mjs --status [--json]              列出目的地快照清单
@@ -150,6 +152,15 @@ function doStatus() {
   else console.log(snaps.length ? snaps.map((s) => `${s.snapshot}  ${s.count} 文件 ${s.bytes}B`).join('\n') : '(还没有快照)');
 }
 
+function doUninstall() {
+  const r = spawnSync('schtasks', ['/Delete', '/TN', TASK_NAME, '/F'], { encoding: 'utf8' });
+  if (r.status !== 0) {
+    console.error(`[失败] schtasks 删除失败（status=${r.status}）：${String(r.stderr || r.stdout).slice(0, 200)}`);
+    process.exit(1);
+  }
+  console.log(`✓ 任务计划已删除：${TASK_NAME}——备份改为人工节奏（控制台「立即备份」/ 双击 备份.cmd）`);
+}
+
 function doInstall() {
   // 任务计划指向 备份.cmd（%~dp0 自定位中文路径；cmd 内容纯 ASCII——PowerShell 无 BOM 坑同款纪律）
   const cmdFile = join(HERE, '备份.cmd');
@@ -167,5 +178,6 @@ if (args.includes('--list')) { doList(); process.exit(0); }
 if (args.includes('--run')) { doRun(); process.exit(0); }
 if (args.includes('--status')) { doStatus(); process.exit(0); }
 if (args.includes('--install')) { doInstall(); process.exit(0); }
-console.error('[用法] backup.mjs --run [--json] [--dest <dir>] | --status [--json] | --install');
+if (args.includes('--uninstall')) { doUninstall(); process.exit(0); }
+console.error('[用法] backup.mjs --run [--json] [--dest <dir>] | --status [--json] | --install | --uninstall');
 process.exit(2);

@@ -78,10 +78,11 @@ inbox 仅做留档与滚动清理。webhook 链路（POST ZCode `/api/bots/webho
 
 ## 备份与恢复（2026-11-28）
 
-**每日 04:30 自动快照**（任务计划 `zcode-fishtank-backup` → `备份.cmd` → `backup.mjs --run`）到 `工作区/fishpond-backup/backup-YYYY-MM-DD/`，保留 14 份；控制台运维页可手动「立即备份」。
+**人工节奏快照**（2026-11-28 裁决：无自动任务计划；`backup.mjs --uninstall` 已移除注册，想恢复自动随时 `--install`）到 `工作区/fishpond-backup/backup-YYYY-MM-DD/`，保留 14 份；控制台运维页可手动「立即备份」。
 
 - **备份内容**（白名单式，`--list` 可自查）：`fishpond/memory/**`（记忆/行话/名册/游标/队列/全部 .bak）、`persona.md`、`diary/**`、`emojis/**`、`.learner-prompt.md`/`.diary-prompt.md`、`fishpond/logs/**`（chat.jsonl 聊天史 / speak.jsonl 冷却+统计源）、`fishpond/state/**`（便签）、`fish-adapter/logs/` 留痕本体（wake.jsonl/audit.log/sessions.jsonl/diary-deleted.jsonl/chat-test.jsonl）+ 每份快照带 `manifest.json`（文件清单/字节数）
 - **明确不备**：`config.json` 与 `fish-adapter/backups/`（含 NapCat token 与各厂商 key——密钥不落第二处，盘坏后重配 token 约 5 分钟）；attachments/.inbox/.outbox（短缓存）；adapter.log/wake-trace.jsonl（可丢大日志）
+- **忘记防线**：控制台运维页状态行显示"距上次备份 N 天"（≥3 天警示色）——人工模式的唯一安全网是看到它；`备份.cmd` 双击兜底。
 - **恢复（灾难手册）**：
   1. 重装 ZCode/NapCat/适配器（仓库克隆 + config.example.json 重填 token）
   2. 从快照按原相对路径覆盖回：`fishpond/**` → `fishpond/`，`fish-adapter/logs/**` → `fish-adapter/logs/`

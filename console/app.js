@@ -1348,9 +1348,14 @@ async function loadBackupStatus() {
     const r = await api('/api/backup');
     const d = r.data;
     const fmt = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)}M` : `${Math.round(n / 1024)}K`;
-    $('#bk-out').textContent = d.latest
-      ? `最近快照 ${d.latest.snapshot}（${d.latest.count} 文件 · ${fmt(d.latest.bytes)}）· 保留 ${d.snapshots.length}/${d.keep} 份`
-      : '还没有快照——点「立即备份」生成第一份';
+    if (d.latest) {
+      const days = d.daysSinceLast;
+      const stale = days != null && days >= 3;
+      $('#bk-out').innerHTML = `最近快照 ${d.latest.snapshot}（${d.latest.count} 文件 · ${fmt(d.latest.bytes)}）· 保留 ${d.snapshots.length}/${d.keep} 份`
+        + (days != null ? ` · ${stale ? `<b style="color:#c25e5e">距上次备份 ${days} 天——该备份了</b>` : `距上次备份 ${days} 天`}` : '');
+    } else {
+      $('#bk-out').innerHTML = '<b style="color:#c25e5e">还没有快照——点「立即备份」生成第一份</b>';
+    }
   } catch (e) {
     $('#bk-out').textContent = '状态读取失败：' + e.message;
   }
