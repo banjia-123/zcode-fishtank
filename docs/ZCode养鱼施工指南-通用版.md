@@ -52,7 +52,7 @@ NapCat（QQ 协议端，独立进程 + watchdog 保活）
 fishpond/（鱼的工作区，ZCode 独立项目）
    ├─ persona.md        人格卡
    ├─ emojis/           表情包库（人工策展 + index.json 图说）
-   ├─ memory/           记忆（core / candidates / roster / vocab / style）
+   ├─ memory/           记忆（core / candidates / roster / vocab）
    └─ .zcode/config.json  PreToolUse hook（guard 硬钉）
    ↕
 ZCode（automation 定时驱动"鱼" + guard 管住"鱼的手"）

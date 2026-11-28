@@ -152,6 +152,10 @@
           <div class="card-head"><h2>行话候选</h2><span class="hint" id="rv-v-cnt">—</span></div>
           <div class="rev-list" id="rv-vocab"></div>
         </div>
+        <div class="rev-col card">
+          <div class="card-head"><h2>名册候选</h2><span class="hint" id="rv-r-cnt">—</span></div>
+          <div class="rev-list" id="rv-roster"></div>
+        </div>
       </div>
 
       <div class="rev-bar card">
@@ -174,6 +178,7 @@
           <div class="seg" id="mem-seg">
             <button data-k="memory" class="on">记忆</button>
             <button data-k="vocab">行话</button>
+            <button data-k="roster">名册</button>
           </div>
           <input class="search" id="mem-search" placeholder="搜索…">
           <button class="btn ghost" id="mem-refresh">刷新</button>
@@ -267,7 +272,7 @@
       <div class="page-head">
         <div>
           <h1>试聊台</h1>
-          <div class="sub">直接和鱼对话——不进聊天记录 / 不占额度 / 不发出站；返回原始输出（含思考过程），改完 persona 立即试效果</div>
+          <div class="sub">直接和鱼对话——不进聊天记录 / 不占额度 / 不发出站；返回原始输出（含思考过程），改完 persona 立即试效果。⚠️ 完整隔离环境：不带长期记忆/行话/名册/便签——测人格语气可以，测记忆效果不行（记忆效果只能看群里真实表现）</div>
         </div>
         <div class="page-actions">
           <button class="btn ghost" id="chattest-clear">清空对话</button>

@@ -89,6 +89,76 @@ try {
   // M3 坏 payload：exit 2
   const m3 = run(MEMORY_SCRIPT, ['--candidates', cand, '--core', core, '--apply', '--json', '{bad']);
   ok(m3.status === 2, 'M3 memory 坏 payload：exit 2', `status=${m3.status}`);
+
+  // —— R 组：roster-review（2026-11-28 名册审校，控制台 spawn 契约面）——
+  const ROSTER_SCRIPT = fileURLToPath(pathToFileURL(join(HERE, 'roster-review.mjs')));
+  const rFile = join(fx, 'roster.json');
+  writeFileSync(rFile, JSON.stringify({
+    entries: [
+      { uid: '10001', nick: '候选君', activity: 'high', note: '教过吾认图', status: 'candidate', source: '777', firstSeen: '2026-11-27' },
+      { uid: '10002', nick: '已转正', activity: 'mid', note: '常在', status: 'confirmed', source: '777', firstSeen: '2026-11-27' },
+    ],
+  }), 'utf8');
+
+  // R1 --list：纯读分列
+  const r1 = run(ROSTER_SCRIPT, ['--file', rFile, '--list', '--json']);
+  const jr1 = jsonOf(r1.stdout);
+  ok(r1.status === 0 && jr1?.ok === true && jr1.candidates.length === 1 && jr1.candidates[0].id === '10001' && jr1.confirmed.count === 1, 'R1 roster --list：候选/已转正分列', r1.stdout.slice(0, 120));
+  ok(readFileSync(rFile, 'utf8').includes('"candidate"'), 'R1b --list 纯读不写盘');
+
+  // R2 --apply confirm：candidate → confirmed
+  const rp = join(fx, 'r2.json');
+  writeFileSync(rp, JSON.stringify({ items: [{ id: '10001', action: 'confirm' }] }), 'utf8');
+  const r2 = run(ROSTER_SCRIPT, ['--file', rFile, '--apply', '--json-file', rp]);
+  const jr2 = jsonOf(r2.stdout);
+  ok(r2.status === 0 && jr2?.ok === true && jr2.results[0]?.ok === true && jr2.results[0]?.effect === 'confirmed', 'R2 confirm：转正生效', r2.stdout.slice(0, 120));
+  ok(readFileSync(rFile, 'utf8').includes('"confirmed"') && readFileSync(rFile, 'utf8').includes('候选君'), 'R2b 落盘：status 已改 + 内容保留');
+  ok(readFileSync(rFile + '.bak', 'utf8').includes('"candidate"'), 'R2c 首写前 .bak 备份');
+
+  // R3 --apply 动作防串（重置 fixture：candidate 10001/10003 + confirmed 10002）
+  writeFileSync(rFile, JSON.stringify({
+    entries: [
+      { uid: '10001', nick: '候选甲', activity: 'high', note: 'a', status: 'candidate', source: '777', firstSeen: '2026-11-27' },
+      { uid: '10003', nick: '候选丙', activity: 'low', note: 'c', status: 'candidate', source: '777', firstSeen: '2026-11-28' },
+      { uid: '10002', nick: '已转正', activity: 'mid', note: '常在', status: 'confirmed', source: '777', firstSeen: '2026-11-27' },
+    ],
+  }), 'utf8');
+  const rp3 = join(fx, 'r3.json');
+  writeFileSync(rp3, JSON.stringify({ items: [{ id: '10002', action: 'reject' }, { id: '10001', action: 'remove' }] }), 'utf8');
+  const r3 = run(ROSTER_SCRIPT, ['--file', rFile, '--apply', '--json-file', rp3]);
+  const jr3 = jsonOf(r3.stdout);
+  ok(r3.status === 0 && jr3?.ok === true && jr3.results.every((x) => !x.ok) && /下架请用 remove/.test(jr3.results[0].error), 'R3a reject 对 confirmed 拒绝（防串）', r3.stdout.slice(0, 140));
+  ok(/驳回请用 reject/.test(jr3.results[1].error), 'R3b remove 对 candidate 拒绝');
+
+  // R4 同 payload 重复 id → "id not found"（seen 语义，沿袭 vocab-review 同款）
+  const rp4 = join(fx, 'r4.json');
+  writeFileSync(rp4, JSON.stringify({ items: [{ id: '10001', action: 'confirm' }, { id: '10001', action: 'confirm' }] }), 'utf8');
+  const r4 = run(ROSTER_SCRIPT, ['--file', rFile, '--apply', '--json-file', rp4]);
+  const jr4 = jsonOf(r4.stdout);
+  ok(r4.status === 0 && jr4.results[0]?.ok && jr4.results[1]?.error === 'id not found', 'R4 同 payload 重复 id 报 seen 错', r4.stdout.slice(0, 140));
+  // R4b 跨 payload 幂等：对已转正条目再 confirm → noop（R3 fixture 里 10001 已被 R4 confirm）
+  const rp4b = join(fx, 'r4b.json');
+  writeFileSync(rp4b, JSON.stringify({ items: [{ id: '10001', action: 'confirm' }] }), 'utf8');
+  const r4b = run(ROSTER_SCRIPT, ['--file', rFile, '--apply', '--json-file', rp4b]);
+  const jr4b = jsonOf(r4b.stdout);
+  ok(r4b.status === 0 && jr4b.results[0]?.effect === 'noop', 'R4b 跨 payload 重复 confirm 幂等 noop', r4b.stdout.slice(0, 100));
+  // R4c remove：下架已转正（删除提案闭环用）——10002 是 confirmed
+  const rp4c = join(fx, 'r4c.json');
+  writeFileSync(rp4c, JSON.stringify({ items: [{ id: '10002', action: 'remove' }] }), 'utf8');
+  const r4c = run(ROSTER_SCRIPT, ['--file', rFile, '--apply', '--json-file', rp4c]);
+  const jr4c = jsonOf(r4c.stdout);
+  ok(r4c.status === 0 && jr4c.results[0]?.effect === 'removed' && !readFileSync(rFile, 'utf8').includes('已转正'), 'R4c remove：下架删除生效');
+
+  // R5 坏 roster.json：fail-closed exit 1 + 不写盘
+  writeFileSync(rFile, '{broken', 'utf8');
+  const rp5 = join(fx, 'r5.json');
+  writeFileSync(rp5, JSON.stringify({ items: [{ id: '1', action: 'confirm' }] }), 'utf8');
+  const r5 = run(ROSTER_SCRIPT, ['--file', rFile, '--apply', '--json-file', rp5]);
+  ok(r5.status === 1 && /校验失败/.test(r5.stdout), 'R5 坏文件拒审 fail-closed（outJson→stdout）', `status=${r5.status}`);
+
+  // R6 无模式参数：用法提示 exit 2
+  const r6 = run(ROSTER_SCRIPT, ['--file', rFile]);
+  ok(r6.status === 2 && /用法/.test(r6.stderr), 'R6 无模式参数 → 用法提示 exit 2', `status=${r6.status}`);
 } finally {
   try { rmSync(fx, { recursive: true, force: true }); } catch { /* 临时目录 */ }
 }

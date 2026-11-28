@@ -424,13 +424,14 @@ $('#wk-result').addEventListener('change', (e) => { wkState.result = e.target.va
 $('#wk-refresh').addEventListener('click', () => { renderWakes(); toast('已刷新'); });
 
 // ── 审阅页（G5）：候选裁决 · 只批不编 + 删除提案闭环（G5b：批准=执行删除，驳回=撤销提案）──
-const rvSel = { memory: new Set(), vocab: new Set() };
-const rvSelRm = { memory: new Set(), vocab: new Set() }; // 删除提案按 rid 选中（与普通 id 空间分开）
+const rvSel = { memory: new Set(), vocab: new Set(), roster: new Set() };
+const rvSelRm = { memory: new Set(), vocab: new Set(), roster: new Set() }; // 删除提案按 rid 选中（与普通 id 空间分开）
+const RV_LABEL = { memory: '记忆', vocab: '行话', roster: '名册' };
 
 function rvRemoveCard(q) {
   const sel = rvSelRm[q.kind].has(q.rid);
   return `<div class="rcard remove ${sel ? 'sel' : ''}" data-kind="${q.kind}" data-rid="${esc(q.rid)}">
-    <span class="rc-tag del">删除提案</span><span class="rc-tag">${q.kind === 'memory' ? '记忆' : '行话'}</span><span class="rc-tag">${esc((q.ts || '').slice(0, 10))}</span>
+    <span class="rc-tag del">删除提案</span><span class="rc-tag">${RV_LABEL[q.kind] ?? q.kind}</span><span class="rc-tag">${esc((q.ts || '').slice(0, 10))}</span>
     <div class="rc-text">${esc(q.text)}</div>
     ${q.reason ? `<div class="rc-src">理由：${esc(q.reason)}</div>` : ''}
   </div>`;
@@ -444,6 +445,15 @@ function rvCard(kind, it) {
       <div class="rc-text">${esc(it.text)}</div>
     </div>`;
   }
+  if (kind === 'roster') {
+    // 名册候选：id=uid 不渲染进 UI 文本（QQ 号只存在于 data-id 属性供选中传输）
+    const act = { high: '常在', mid: '偶尔在', low: '少来' };
+    return `<div class="rcard ${sel ? 'sel' : ''}" data-kind="roster" data-id="${esc(it.id)}">
+      <span class="rc-tag">${esc(it.nick ?? '(无名)')}</span><span class="rc-tag">${act[it.activity] ?? it.activity ?? '?'}</span><span class="rc-tag">首见 ${esc(it.firstSeen ?? '?')}</span>
+      <div class="rc-text">${esc(it.note ?? '(无备注)')}</div>
+      ${it.source ? `<div class="rc-src">来源群 ${esc(it.source)}</div>` : ''}
+    </div>`;
+  }
   return `<div class="rcard ${sel ? 'sel' : ''}" data-kind="vocab" data-id="${esc(it.id)}">
     <span class="rc-tag">${esc(it.id)}</span><span class="rc-tag">热度 ${it.seenCount ?? 0}</span><span class="rc-tag">首见 ${esc(it.firstSeen ?? '?')}</span>
     <div class="rc-text">${esc(it.meaning ?? '(无释义)')}${it.usage ? ' · ' + esc(it.usage) : ''}</div>
@@ -452,9 +462,9 @@ function rvCard(kind, it) {
 }
 
 async function loadReview() {
-  const [m, v] = await Promise.all([api('/api/review/memory'), api('/api/review/vocab')]);
-  const md = m.data, vd = v.data;
-  lastGood.review = { md, vd };
+  const [m, v, r] = await Promise.all([api('/api/review/memory'), api('/api/review/vocab'), api('/api/review/roster')]);
+  const md = m.data, vd = v.data, rd = r.data;
+  lastGood.review = { md, vd, rd };
   const mItems = md.items ?? [], vItems = vd.candidates ?? [];
   const mRm = md.removes ?? [], vRm = vd.removes ?? [];
   $('#rv-m-cnt').textContent = (mItems.length + mRm.length)
@@ -469,17 +479,25 @@ async function loadReview() {
   $('#rv-vocab').innerHTML = (vRm.length ? vRm.map(rvRemoveCard).join('') : '')
     + (vItems.length ? vItems.map((it) => rvCard('vocab', it)).join('')
       : (vRm.length ? '' : '<div class="na-box"><div class="t">没有行话候选</div><div class="d">等学习任务从群聊里攒出新词。</div></div>'));
-  rvSel.memory.clear(); rvSel.vocab.clear();
-  rvSelRm.memory.clear(); rvSelRm.vocab.clear();
+  const rItems = rd.candidates ?? [], rRm = rd.removes ?? [];
+  $('#rv-r-cnt').textContent = (rItems.length + rRm.length)
+    ? `${rItems.length} 条待审${rRm.length ? ` + ${rRm.length} 条下架提案` : ''} · confirmed ${rd.confirmed ? rd.confirmed.count : '—'}`
+    : '没有待审';
+  $('#rv-roster').innerHTML = (rRm.length ? rRm.map(rvRemoveCard).join('') : '')
+    + (rItems.length ? rItems.map((it) => rvCard('roster', it)).join('')
+      : (rRm.length ? '' : `<div class="na-box"><div class="t">没有名册候选</div><div class="d">学习任务攒出新面孔后出现在这里；转正后她开口就能认人。</div></div>`));
+  rvSel.memory.clear(); rvSel.vocab.clear(); rvSel.roster.clear();
+  rvSelRm.memory.clear(); rvSelRm.vocab.clear(); rvSelRm.roster.clear();
   rvUpdateBar();
 }
 
 function rvUpdateBar() {
-  const m = rvSel.memory.size + rvSelRm.memory.size, v = rvSel.vocab.size + rvSelRm.vocab.size;
-  const rm = rvSelRm.memory.size + rvSelRm.vocab.size;
-  $('#rv-sel').innerHTML = (m + v === 0) ? '点击卡片选择（可跨两栏混合提交）'
-    : `已选 <b>${m + v}</b> 条（记忆 ${m} · 行话 ${v}${rm ? `，其中删除提案 ${rm}` : ''}）`;
-  $('#rv-approve').disabled = $('#rv-reject').disabled = (m + v === 0);
+  const m = rvSel.memory.size + rvSelRm.memory.size, v = rvSel.vocab.size + rvSelRm.vocab.size, r = rvSel.roster.size + rvSelRm.roster.size;
+  const rm = rvSelRm.memory.size + rvSelRm.vocab.size + rvSelRm.roster.size;
+  const total = m + v + r;
+  $('#rv-sel').innerHTML = (total === 0) ? '点击卡片选择（可跨三栏混合提交）'
+    : `已选 <b>${total}</b> 条（记忆 ${m} · 行话 ${v} · 名册 ${r}${rm ? `，其中删除提案 ${rm}` : ''}）`;
+  $('#rv-approve').disabled = $('#rv-reject').disabled = (total === 0);
 }
 
 function rvToggle(c) {
@@ -499,6 +517,7 @@ async function submitReview(action) {
   const kinds = [
     ['memory', rvSel.memory, rvSelRm.memory],
     ['vocab', rvSel.vocab, rvSelRm.vocab],
+    ['roster', rvSel.roster, rvSelRm.roster],
   ].filter(([, s, srm]) => s.size || srm.size);
   if (!kinds.length) return;
   const total = kinds.reduce((a, [, s, srm]) => a + s.size + srm.size, 0);
@@ -522,7 +541,7 @@ async function submitReview(action) {
       });
       parts.push({ kind, ...r.data });
     } catch (e) {
-      errs.push(`${kind === 'memory' ? '记忆' : '行话'}：${e.message}`);
+      errs.push(`${RV_LABEL[kind] ?? kind}：${e.message}`);
     }
   }
   const box = $('#rv-result');
@@ -531,7 +550,7 @@ async function submitReview(action) {
     const all = [...(r.results ?? []), ...(r.removeResults ?? [])];
     const okN = all.filter((x) => x.ok).length, failN = all.length - okN;
     const bk = r.backup ? (typeof r.backup === 'string' ? r.backup : Object.values(r.backup).filter(Boolean).join('，')) : null;
-    return `${r.kind === 'memory' ? '记忆' : '行话'}：成功 ${okN}${failN ? ` · 失败 ${failN}` : ''}${bk ? ` · 备份 <code>${esc(bk)}</code>` : ''}`
+    return `${RV_LABEL[r.kind] ?? r.kind}：成功 ${okN}${failN ? ` · 失败 ${failN}` : ''}${bk ? ` · 备份 <code>${esc(bk)}</code>` : ''}`
       + all.filter((x) => !x.ok).map((x) => `<br><span class="fail">✗ ${esc(String(x.id ?? x.rid ?? '').slice(0, 12))}：${esc(x.error)}</span>`).join('');
   }).join('<br>') + errs.map((e) => `<br><span class="fail">✗ ${esc(e)}</span>`).join('');
   loadReview().catch(() => {});
@@ -539,6 +558,7 @@ async function submitReview(action) {
 
 $('#rv-memory').addEventListener('click', (e) => { const c = e.target.closest('.rcard'); if (c) rvToggle(c); });
 $('#rv-vocab').addEventListener('click', (e) => { const c = e.target.closest('.rcard'); if (c) rvToggle(c); });
+$('#rv-roster').addEventListener('click', (e) => { const c = e.target.closest('.rcard'); if (c) rvToggle(c); });
 $('#rv-approve').addEventListener('click', () => submitReview('approve').catch((e) => toast('批准失败：' + e.message)));
 $('#rv-reject').addEventListener('click', () => submitReview('reject').catch((e) => toast('驳回失败：' + e.message)));
 $('#rv-refresh').addEventListener('click', () => { loadReview().then(() => toast('已刷新')).catch((e) => toast(e.message)); });
@@ -572,6 +592,23 @@ async function loadMemoryPage() {
         <button class="mi-more" data-kind="memory" data-id="${esc(e.id)}" title="申请删除（进提案，人工执行）">···</button>
       </div>`;
     }).join('') || '<div class="wempty">没有匹配的条目</div>';
+  } else if (memState.tab === 'roster') {
+    // 名册生效态（2026-11-28 对齐闸门模式）：confirmed 列表 + 下架提案入口
+    const r = await api('/api/review/roster');
+    const rd = r.data;
+    lastGood.memRoster = rd;
+    const conf = rd.confirmed ?? { count: 0, items: [] };
+    $('#mem-sub').textContent = `名册已转正 ${conf.count} 条（每群注入上限 8 人；candidate 去审阅页批）`;
+    $('#mem-strip').innerHTML = `名册 confirmed <b>${conf.count}</b> 条 · 来源群可在条目上看`;
+    const kw = memState.search;
+    const rows = (conf.items || []).filter((e) => !kw || ((e.nick ?? '') + (e.note ?? '') + (e.source ?? '')).includes(kw));
+    $('#mem-list').innerHTML = rows.map((e) => `<div class="mem-item">
+      <div>
+        <div class="mi-text"><b>${esc(e.nick ?? '(无名)')}</b> — ${esc(e.note ?? '(无备注)')}</div>
+        <div class="mi-meta"><span>${{ high: '常在', mid: '偶尔在', low: '少来' }[e.activity] ?? e.activity ?? '?'}</span>${e.firstSeen ? `<span>首见 ${esc(e.firstSeen)}</span>` : ''}${e.source ? `<span>来源群 ${esc(e.source)}</span>` : ''}</div>
+      </div>
+      <button class="mi-more" data-kind="roster" data-id="${esc(e.id)}" title="申请下架（进提案，人工执行）">···</button>
+    </div>`).join('') || '<div class="wempty">名册还没有已转正条目</div>';
   } else {
     const r = await api('/api/vocab-effective');
     const v = r.data.vocab;
@@ -593,7 +630,7 @@ async function loadMemoryPage() {
 $('#mem-list').addEventListener('click', async (e) => {
   if (!e.target.matches('.mi-more')) return;
   const kind = e.target.dataset.kind, id = e.target.dataset.id;
-  const verb = kind === 'memory' ? '删除这条记忆' : '下架这个词';
+  const verb = kind === 'memory' ? '删除这条记忆' : kind === 'roster' ? '下架这个名册条目' : '下架这个词';
   if (!confirm(`确定为「${id.slice(0, 16)}」申请${verb}吗？\n提案会进入审阅页，你在那里批准后才真删（驳回则什么都不动）。`)) return;
   const reason = prompt('理由（可选，会显示在提案卡片上）：') ?? '';
   try {

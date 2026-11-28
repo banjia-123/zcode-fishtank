@@ -692,9 +692,20 @@ function runReviewScript(script, args) {
   });
 }
 
-// GET /api/review/memory|vocab：候选列表（脚本 --list 纯读）+ 同 kind 删除提案（G5b 合并进候选区）
+// 审阅 kind 注册表（2026-11-28 三值化，roster 对齐 vocab/memory 的闸门模式）：
+// script = 审校脚本；actions = 前端可发的裁决动作；itemApprove/removesApprove = 发给脚本的翻译
+// （roster 脚本动词是 confirm/remove，前端仍统一 approve/reject，翻译在这层做）；label = UI 文案
+const REVIEW_KINDS = {
+  memory: { script: 'memory-review.mjs', actions: ['approve', 'reject'], itemApprove: 'approve', removesApprove: 'remove-core', removeEffect: 'removed-from-core', label: '记忆' },
+  vocab: { script: 'vocab-review.mjs', actions: ['approve', 'reject'], itemApprove: 'approve', removesApprove: 'retire', removeEffect: 'retired', label: '行话' },
+  roster: { script: 'roster-review.mjs', actions: ['approve', 'reject'], itemApprove: 'confirm', removesApprove: 'remove', removeEffect: 'removed-from-roster', label: '名册' },
+};
+const normalizeKind = (k) => (REVIEW_KINDS[k] ? k : 'memory');
+
+// GET /api/review/memory|vocab|roster：候选列表（脚本 --list 纯读）+ 同 kind 删除提案（G5b 合并进候选区）
 async function apiReviewList(kind) {
-  const r = await runReviewScript(kind === 'memory' ? 'memory-review.mjs' : 'vocab-review.mjs', ['--list', '--json']);
+  const K = REVIEW_KINDS[kind];
+  const r = await runReviewScript(K.script, ['--list', '--json']);
   if (!r.ok) throw httpErr(500, 'E_SCRIPT', r.error ?? '审阅脚本失败');
   const removes = readRemoveQueue().filter((q) => q.kind === kind);
   return { kind, removes, ...(kind === 'memory' ? { items: r.items ?? [], core: r.core ?? null } : { candidates: r.candidates ?? [], confirmed: r.confirmed ?? null }) };
@@ -703,7 +714,7 @@ async function apiReviewList(kind) {
 // 裁决令牌（60s 一次性，内存）：approve/reject 是写操作，取令牌→确认→提交两步防手滑
 const reviewTokens = new Map(); // token -> { kind, expiresAt }
 function apiReviewToken(q) {
-  const kind = q.get('kind') === 'vocab' ? 'vocab' : 'memory';
+  const kind = normalizeKind(q.get('kind'));
   for (const [k, v] of reviewTokens) if (v.expiresAt < Date.now()) reviewTokens.delete(k); // 顺手清扫
   const token = randomUUID().replace(/-/g, '');
   const expiresAt = Date.now() + 60_000;
@@ -714,12 +725,13 @@ function apiReviewToken(q) {
 // POST /api/review/decision {kind, token, items:[{id, action}]}
 // items 走 --json-file（临时文件）——argv 传 JSON 有 Windows 32K 限制和引号地狱
 async function apiReviewDecision(body) {
-  const kind = body.kind === 'vocab' ? 'vocab' : 'memory';
+  const kind = normalizeKind(body.kind);
   const tk = reviewTokens.get(String(body.token ?? ''));
   if (!tk || tk.expiresAt < Date.now()) throw httpErr(410, 'E_TOKEN_INVALID', '令牌不存在或已过期（60 秒），请重新确认');
   if (tk.kind !== kind) throw httpErr(410, 'E_TOKEN_INVALID', '令牌与目标不匹配');
   reviewTokens.delete(String(body.token)); // 一次性
-  const OK_ACTIONS = kind === 'memory' ? ['approve', 'reject', 'remove-core'] : ['approve', 'reject', 'retire'];
+  const K2 = REVIEW_KINDS[kind];
+  const OK_ACTIONS = K2.actions;
   const items = Array.isArray(body.items) ? body.items : [];
   // G5b：removes = [{rid, action: approve|reject}]——approve 转 remove-core（记忆）/retire（行话）随批执行，reject 撤销提案
   const removesIn = Array.isArray(body.removes) ? body.removes : [];
@@ -738,7 +750,7 @@ async function apiReviewDecision(body) {
   }
   const queue = readRemoveQueue();
   const ridSeen = new Set();
-  const scriptItems = [...items];
+  const scriptItems = items.map((it) => ({ ...it, action: it.action === 'approve' ? K2.itemApprove : it.action }));
   const scriptRemoveIds = new Set(); // remove 转成的脚本 id（结果里要拆到 removeResults 汇报）
   const removeMeta = []; // {rid, action, queueIdx} | {rid, ok:false, error}
   for (const rm of removesIn) {
@@ -748,14 +760,14 @@ async function apiReviewDecision(body) {
     if (qi < 0) { removeMeta.push({ rid: rm.rid, ok: false, error: '提案不在队列（可能刚被处理）' }); continue; }
     if (rm.action === 'approve') {
       scriptRemoveIds.add(queue[qi].id);
-      scriptItems.push({ id: queue[qi].id, action: kind === 'memory' ? 'remove-core' : 'retire' });
+      scriptItems.push({ id: queue[qi].id, action: K2.removesApprove });
     }
     removeMeta.push({ rid: rm.rid, action: rm.action, queueIdx: qi });
   }
   const tmp = join(tmpdir(), `fish-console-review-${Date.now()}-${randomUUID().slice(0, 8)}.json`);
   try {
     writeFileSync(tmp, JSON.stringify({ items: scriptItems }), 'utf8');
-    const r = await runReviewScript(kind === 'memory' ? 'memory-review.mjs' : 'vocab-review.mjs', ['--apply', '--json-file', tmp]);
+    const r = await runReviewScript(K2.script, ['--apply', '--json-file', tmp]);
     if (!r.ok) throw httpErr(500, 'E_SCRIPT', r.error ?? '裁决脚本失败');
     // 队列结算：approve 成功 / reject 的移出队列；失败的留在队列里可重试
     const allResults = r.results ?? [];
@@ -765,7 +777,7 @@ async function apiReviewDecision(body) {
       if (m.ok === false) return m;
       if (m.action === 'reject') { doneIdx.add(m.queueIdx); return { rid: m.rid, ok: true, effect: 'withdrawn' }; }
       const q = queue[m.queueIdx];
-      if (okIds.has(q.id)) { doneIdx.add(m.queueIdx); return { rid: m.rid, ok: true, effect: kind === 'memory' ? 'removed-from-core' : 'retired' }; }
+      if (okIds.has(q.id)) { doneIdx.add(m.queueIdx); return { rid: m.rid, ok: true, effect: K2.removeEffect }; }
       return { rid: m.rid, ok: false, error: allResults.find((x) => x.id === q.id && !x.ok)?.error ?? '脚本未处理该条' };
     });
     if (doneIdx.size) {
@@ -789,13 +801,20 @@ async function apiReviewDecision(body) {
 // POST /api/review/propose-remove {kind, id, reason}：生成删除提案进队列（G5b：审阅页批准才真删）
 // 原文快照服务端自查（不信前端）；同目标去重
 function apiProposeRemove(body) {
-  const kind = body.kind === 'vocab' ? 'vocab' : 'memory';
+  const kind = normalizeKind(body.kind);
   if (typeof body.id !== 'string' || !body.id) throw httpErr(400, 'E_BAD_PARAM', 'id 必填');
   let text = null;
   if (kind === 'memory') {
     const c = parseCoreMd();
     if (c.state !== 'ready') throw httpErr(409, 'E_CONFLICT', 'core.md 不可读，无法提案');
     text = (c.entries ?? []).find((e) => e.id === body.id)?.text ?? null;
+  } else if (kind === 'roster') {
+    try {
+      const rj = JSON.parse(readFileSync(join(FISHPOND, 'memory', 'roster.json'), 'utf8'));
+      const e = (rj.entries ?? []).find((x) => x.uid === body.id && x.status === 'confirmed');
+      // 快照只含 nick/note/来源——uid 本身不进提案文本（提案卡片是本地 UI，但少一处明文习惯更稳）
+      text = e ? `${e.nick ?? '(无名)'}（${e.activity ?? '?'}）：${e.note ?? ''}` : null;
+    } catch { /* 名册读不了按不存在 */ }
   } else {
     try {
       const v = JSON.parse(readFileSync(VOCAB_JSON, 'utf8'));
@@ -1825,6 +1844,7 @@ const server = createServer((req, res) => {
         if (url === '/api/wakes/trace' && req.method === 'GET') return route(() => apiWakesTrace(u.searchParams));
         if (url === '/api/review/memory' && req.method === 'GET') return route(() => apiReviewList('memory'));
         if (url === '/api/review/vocab' && req.method === 'GET') return route(() => apiReviewList('vocab'));
+        if (url === '/api/review/roster' && req.method === 'GET') return route(() => apiReviewList('roster'));
         if (url === '/api/review/token' && req.method === 'GET') return route(() => apiReviewToken(u.searchParams));
         if (url === '/api/review/decision' && req.method === 'POST') return route(() => readBody().then(apiReviewDecision));
         if (url === '/api/review/propose-remove' && req.method === 'POST') return route(() => readBody().then(apiProposeRemove));
