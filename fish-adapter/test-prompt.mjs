@@ -132,6 +132,50 @@ try {
   const p13 = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir, chatKey: 'g:777' });
   ok(!p13.includes('认人名册'), 'P13 无名册文件不炸、段不渲染');
 
+  // P16 长期记忆+行话注入（2026-11-28 P0 记忆断链修复）：core.md + vocab confirmed 进稳定前缀区
+  const dir4 = mkdtempSync(join(tmpdir(), 'fish-core-'));
+  try {
+    writeFileSync(join(dir4, 'persona.md'), '# 人格\nx', 'utf8');
+    mkdirSync(join(dir4, 'memory'), { recursive: true });
+    writeFileSync(join(dir4, 'memory', 'core.md'), [
+      '# 长期记忆（人工确认过的事实）',
+      '',
+      '> 格式：- [日期] 事实',
+      '',
+      '- [2026-11-14] 鱼的生日自选为2月29（来源：群消息原话）',
+      '- [2026-11-22] 主人的 bot 被腾讯风控过一次（来源：主人原话）',
+    ].join('\n'), 'utf8');
+    writeFileSync(join(dir4, 'memory', 'vocab.json'), JSON.stringify({
+      entries: [
+        { word: '斩杀', meaning: '被腾讯风控封号的戏称', status: 'confirmed', seenCount: 4 },
+        { word: '候选词', meaning: '还没转正的词', status: 'candidate', seenCount: 1 },
+      ],
+    }), 'utf8');
+    writeFileSync(join(dir4, 'memory', 'roster.json'), JSON.stringify({
+      entries: [{ uid: '1', nick: '阿明', activity: 'high', note: 'x', status: 'confirmed', source: '777' }],
+    }), 'utf8');
+    const msg = mkMsg('<group_message from="a" uid="1">早</group_message>');
+    const p16 = buildPrompt({}, [msg], { personaDir: dir4, chatKey: 'g:777' });
+    ok(p16.includes('【你记下的事（长期记忆）】') && p16.includes('鱼的生日自选为2月29'), 'P16a core.md 条目注入（跳过标题/格式行）');
+    ok(p16.includes('- 斩杀：被腾讯风控封号的戏称') && !p16.includes('候选词'), 'P16b vocab 只注 confirmed（candidate 物理上进不来）');
+    ok(p16.includes('别露出"翻记忆档案"的痕迹') && p16.includes('别解释词义'), 'P16b2 两段纪律行带上（防背诵/防词典感）');
+    const iCore = p16.indexOf('【你记下的事');
+    const iVocab = p16.indexOf('【群里的行话】');
+    const iRoster = p16.indexOf('【这个群的常客');
+    const iMsg = p16.indexOf('【以下是 QQ 消息');
+    ok(iCore !== -1 && iVocab !== -1 && iRoster !== -1 && iCore < iVocab && iVocab < iRoster && iRoster < iMsg, 'P16c 段序：core→vocab→名册→消息段（稳定前缀区）');
+    // 60 行红线截断：造 65 条，第 61 条不注入
+    writeFileSync(join(dir4, 'memory', 'core.md'), Array.from({ length: 65 }, (_, i) => `- [2026-11-01] 记事${i + 1}号`).join('\n'), 'utf8');
+    const p16e = buildPrompt({}, [msg], { personaDir: dir4, chatKey: 'g:777' });
+    ok(p16e.includes('记事60号') && !p16e.includes('记事61号'), 'P16e core 注入上限 60 行（与审校红线一致）');
+    // 私聊同样带 core/vocab（名册除外）——core 里多是主人相关事实，私聊更需要
+    const p16p = buildPrompt({}, [mkMsg('<private_message from="主人" uid="9">早</private_message>')], { personaDir: dir4, chatKey: 'p:9' });
+    ok(p16p.includes('【群里的行话】') && !p16p.includes('认人名册'), 'P16f 私聊带行话但不带名册');
+  } finally { try { rmSync(dir4, { recursive: true, force: true }); } catch { /* 临时目录 */ } }
+  // 无任何记忆文件（P16d）：三段全不渲染、不炸（P13 的扩展——core/vocab 同名册降级行为一致）
+  const p16d = buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir, chatKey: 'g:777' });
+  ok(!p16d.includes('【你记下的事') && !p16d.includes('【群里的行话】') && !p16d.includes('认人名册'), 'P16d 无记忆文件三段全不渲染（不装死不炸）');
+
   // P14 试聊台 buildTestPrompt（2026-11-27）：persona 注入/历史格式/[SILENT] 规则
   const cfg14 = { onebot: { selfId: '12345' }, ownerQQ: '99999', botName: '鱼鱼', allow: { groups: ['777'] } };
   const p14 = buildTestPrompt(cfg14, [

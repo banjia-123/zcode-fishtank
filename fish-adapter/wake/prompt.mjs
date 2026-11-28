@@ -38,6 +38,43 @@ function renderRoster(chatKey, personaDir) {
   } catch { return ''; } // 无名册文件 = 功能未启用
 }
 
+// 长期记忆 + 行话注入（2026-11-28，P0 记忆断链修复）：core.md 与 vocab.json 的 confirmed 此前
+// 只有已退役的信箱任务书读它们，秒回链路从未读取——学习/审校链路辛苦产出的资产，鱼开口时看不到。
+// 注入纪律与名册同构：mtime 缓存（命中零解析）、只读人工确认过的内容（candidate 物理上进不来）、
+// 读取失败降级空串（记忆缺失不装死）。变更频率周级（人工审阅才变）→ 放 persona 后稳定前缀区。
+const CORE_MAX_LINES = 60; // 与 memory-review 的 core.md 红线一致
+let coreCache = { mtime: 0, text: '' };
+function coreDigest(personaDir) {
+  try {
+    const p = join(personaDir, 'memory', 'core.md');
+    const st = statSync(p);
+    if (st.mtimeMs !== coreCache.mtime) {
+      const lines = readFileSync(p, 'utf8')
+        .split(/\r?\n/)
+        .filter((l) => l.trim() && !l.startsWith('#') && !l.startsWith('>')); // 跳过标题/格式说明行
+      coreCache = { mtime: st.mtimeMs, text: lines.slice(0, CORE_MAX_LINES).join('\n') };
+    }
+    return coreCache.text;
+  } catch { return ''; } // 无 core.md = 还没有长期记忆
+}
+
+let vocabCache = { mtime: 0, text: '' };
+function vocabDigest(personaDir) {
+  try {
+    const p = join(personaDir, 'memory', 'vocab.json');
+    const st = statSync(p);
+    if (st.mtimeMs !== vocabCache.mtime) {
+      const j = JSON.parse(readFileSync(p, 'utf8'));
+      const lines = (Array.isArray(j.entries) ? j.entries : [])
+        .filter((e) => e?.status === 'confirmed' && e?.word)
+        .slice(0, 20) // 审校侧 confirmed ≤20 名额，这里兜底同值
+        .map((e) => `- ${String(e.word).slice(0, 20)}：${String(e.meaning ?? '').slice(0, 60)}`);
+      vocabCache = { mtime: st.mtimeMs, text: lines.join('\n') };
+    }
+    return vocabCache.text;
+  } catch { return ''; } // 无 vocab.json = 行话库未启用
+}
+
 export function fishpondDir(cfg, pkgRoot) {
   return cfg.bridge?.fishpondDir ?? join(pkgRoot, 'fishpond');
 }
@@ -91,7 +128,9 @@ export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
 
   const hasMust = batch.some((m) => m.must);
   const hasTier2 = batch.some((m) => m.nameTier === 2);
-  // 认人名册：规则区之后、便签之前（名册变更频率周级 < 便签每轮变——稳定前缀最大化）
+  // 长期记忆/行话/名册：规则区之后、便签之前（三者都是周级变更，全在稳定前缀区；便签每轮变垫底）
+  const core = coreDigest(personaDir);
+  const vocab = vocabDigest(personaDir);
   const roster = renderRoster(chatKey, personaDir);
   // S3.1/S3.3 便签注入：拼在消息段之前、任务指令之后（persona 前缀保持固定吃缓存，
   // 会变的便签放后面）；便签自身带边界标记，与消息段的不可信声明分开
@@ -114,6 +153,18 @@ export function buildPrompt(cfg, batch, { personaDir, chatKey }) {
     '- 附件图片按从新到旧排列：第一张是刚收到的（对应消息里的图片标记），后面的才是几分钟前的旧图（讨论复核用）——看清楚再答，别把新图和旧图串台',
     hasMust ? '- 有人在直接叫你（@或喊名）：即使没什么可说的，也至少简短回应一声' : '',
     hasTier2 && !hasMust ? '- 消息里提到了你的名字但不确定是在叫你：想接就接，不想接就 [SILENT]，不用勉强' : '',
+    core ? [
+      '',
+      '【你记下的事（长期记忆）】',
+      core,
+      '- 记忆用来接话和认人——自然带出来，别逐条背诵，别露出"翻记忆档案"的痕迹；和眼前对话冲突时以对话为准',
+    ].join('\n') : '',
+    vocab ? [
+      '',
+      '【群里的行话】',
+      vocab,
+      '- 这些是群里的话，用来听懂语境——自然用就行，别解释词义、别一条条列出来',
+    ].join('\n') : '',
     roster ? [
       '',
       '【这个群的常客（认人名册）】',

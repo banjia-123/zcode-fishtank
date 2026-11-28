@@ -11,7 +11,7 @@ QQ群/私聊 ⇄ NapCat(OneBot v11 WS:3001) ⇄ 本适配器 ⇄ ZCode app-serve
       → 引用解析 → 图片下载(attachments/ + 图片池) → 攒批(普通 5s / @ 1.5s)
       → inbox 留档（只存档，消息不进信箱）
 
-唤醒  攒批到期 flush → buildPrompt(persona + 规则 + 便签 + 表情索引 + 消息段)
+唤醒  攒批到期 flush → buildPrompt(persona + 规则 + 长期记忆/行话/名册 + 便签 + 表情索引 + 消息段)
       → FIFO 闸门(本地拦截不花钱：静默时段/日限/私聊限额)
       → spawn 常驻 ZCode app-server 子进程, session/send + DENY_ALL 零工具
       → session/event 收回复与 usage → 小时级工具面自检+熔断兜底
