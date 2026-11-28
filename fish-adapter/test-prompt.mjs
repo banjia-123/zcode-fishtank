@@ -8,7 +8,7 @@ import { chatKeyToPeerKey } from './lib/peer-store.mjs';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ROOT_DIR } from './lib/util.mjs';
+import { ROOT_DIR, hotJson } from './lib/util.mjs';
 
 let pass = 0, fail = 0;
 function ok(cond, name, detail = '') {
@@ -229,6 +229,64 @@ try {
   const base18 = buildPrompt({}, msgs18, { personaDir: dir });
   ok(base18 === buildPrompt({}, msgs18, { personaDir: dir }), 'P18l 不给 draft 时输出与原报文逐字一致');
   ok(!base18.includes('重写') && !base18.includes('草稿'), 'P18m 原报文不含重写相关字样');
+
+  // P19 缓存按内容刷新（2026-11-28 回归修复）：四处注入/热读缓存曾读 st.mtimeNs——而 statSync 不带
+  // { bigint: true } 时它是 undefined，"修改时间变了吗"实际在比 undefined !== undefined，永远为否，
+  // 刷新条件静默退化为"只剩大小"。转正（candidate→confirmed 等长）于是永远不刷新。
+  // 此前的用例改文件时字节数都变了，所以没抓到。本组全部"同字节数、不同内容、写完立刻读"——不 sleep，
+  // 不依赖任何时间戳性质
+  const dir19 = mkdtempSync(join(tmpdir(), 'fish-p19-'));
+  try {
+    mkdirSync(join(dir19, 'memory'), { recursive: true });
+    mkdirSync(join(dir19, 'emojis'), { recursive: true });
+    const w19 = (rel, s) => { writeFileSync(join(dir19, ...rel.split('/')), Buffer.from(s, 'utf8')); return Buffer.byteLength(s); };
+    w19('persona.md', '# 人格\n你是测试鱼。');
+    w19('emojis/index.json', '{"a.png":"表情甲"}');
+    w19('memory/core.md', '# 记忆\n- 鱼的生日自选为2月29');
+    w19('memory/roster.json', '{"entries":[]}');
+    w19('memory/vocab.json', '{"entries":[]}');
+    const prompt19 = () => buildPrompt({}, [mkMsg('<group_message from="a" uid="1">早</group_message>')], { personaDir: dir19, chatKey: 'g:777' });
+    prompt19(); // 先把各缓存放热——后面每一次改写都发生在这之后
+    const bytes = (s) => Buffer.byteLength(s);
+
+    // 名册：候选 → 转正
+    const rCand = JSON.stringify({ entries: [{ uid: '1', nick: '阿明', activity: 'high', note: '爱养猫', status: 'candidate', source: '777' }] });
+    const rConf = JSON.stringify({ entries: [{ uid: '1', nick: '阿明', activity: 'high', note: '爱养猫', status: 'confirmed', source: '777' }] });
+    w19('memory/roster.json', rCand);
+    ok(!prompt19().includes('阿明'), 'P19a 名册候选不注入', `（前提：两版同为 ${bytes(rCand)}/${bytes(rConf)} 字节）`);
+    w19('memory/roster.json', rConf);
+    ok(bytes(rCand) === bytes(rConf) && prompt19().includes('阿明（常在）：爱养猫'), 'P19b 名册转正后（同大小）立刻注入');
+
+    // 行话：候选 → 转正
+    const vTxt = (status) => JSON.stringify({ entries: [{ word: '斩杀', meaning: '被风控', status, seenCount: 1 }] });
+    w19('memory/vocab.json', vTxt('candidate'));
+    ok(!prompt19().includes('【群里的行话】'), 'P19c 行话候选不注入');
+    w19('memory/vocab.json', vTxt('confirmed'));
+    ok(bytes(vTxt('candidate')) === bytes(vTxt('confirmed')) && prompt19().includes('- 斩杀：被风控'), 'P19d 行话转正后（同大小）立刻注入');
+
+    // 长期记忆：等长改写
+    ok(prompt19().includes('2月29'), 'P19e 记忆初版在');
+    w19('memory/core.md', '# 记忆\n- 鱼的生日自选为2月30');
+    const p19f = prompt19();
+    ok(p19f.includes('2月30') && !p19f.includes('2月29'), 'P19f 记忆等长改写后立刻换成新版');
+
+    // 表情索引：等长改写
+    w19('emojis/index.json', '{"a.png":"表情乙"}');
+    const p19g = prompt19();
+    ok(p19g.includes('表情乙') && !p19g.includes('表情甲'), 'P19g 表情索引等长改写后立刻换成新版');
+
+    // 配置热读：同大小改值（控制台把阈值 2 改成 5 就是这种）
+    w19('config.json', '{"emojiGate":{"max":2}}');
+    ok(hotJson(join(dir19, 'config.json'), (d) => d.emojiGate.max) === 2, 'P19h 配置初读');
+    w19('config.json', '{"emojiGate":{"max":5}}');
+    ok(hotJson(join(dir19, 'config.json'), (d) => d.emojiGate.max) === 5, 'P19i 配置同大小改值后立刻读到新值');
+
+    // 内容真没变：结果稳定（不因为"每次都读"而抖动）
+    const a = prompt19(), b = prompt19();
+    ok(a === b, 'P19j 文件没变时两次合成结果逐字相同（prompt 前缀稳定，不影响模型侧缓存命中）');
+  } finally {
+    try { rmSync(dir19, { recursive: true, force: true }); } catch { /* 临时目录 */ }
+  }
 } finally {
   try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败无妨（临时目录） */ }
 }

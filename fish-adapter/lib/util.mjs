@@ -1,5 +1,5 @@
 // 工具集：日志、审计、OneBot 消息文本化、属性转义、配置加载
-import { appendFileSync, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,20 +17,25 @@ export function log(tag, ...parts) {
   try { appendFileSync(join(LOG_DIR, 'adapter.log'), line + '\n'); } catch { /* 日志失败不阻断业务 */ }
 }
 
-// 热读 JSON 文件（mtime 缓存；同一文件的多个读取方共享一次 stat/parse——D5 收敛原先
-// emojiGateState / typingSecPerChar / selfCheckModel 三处各自为政的同构样板，其中两个
-// 读同一份 config.json 却各 stat 各 parse）。stat/parse 失败原样抛出，降级语义归调用方。
-// P2-1（2026-11-28）：缓存键 mtimeMs 毫秒单键与 wake/prompt.mjs 三处缓存同病——同毫秒二次
-// 写不同内容判"未变"读旧值。升 mtimeNs（BigInt 纳秒）+ size 双键，与 prompt 侧同构根治。
-const hotDocs = new Map(); // 文件绝对路径 -> { mtimeNs, size, doc }
+// 按内容缓存的小文件读取（2026-11-28）：每次都读文件，内容字符串没变才复用上次的解析结果。
+// 不看时间戳。此前两版用 mtime 做键都出过事：毫秒版在同毫秒两次写入时撞车；"纳秒版"读的
+// st.mtimeNs 在 statSync 不带 { bigint: true } 时是 undefined——"修改时间变了吗"实际在比
+// undefined !== undefined，刷新条件静默退化成"只剩大小"，等长改写（如候选→转正）永不刷新。
+// 这些文件都只有几 KB，每轮读一遍的成本可以忽略；时间戳假设带来的坑不能忽略。
+// build 抛错时缓存不更新、错误原样抛出；文件读不了同样原样抛出——降级语义归调用方
+const contentCache = new Map(); // 文件路径 -> { raw, value }
+export function readCached(file, build) {
+  const raw = readFileSync(file, 'utf8');
+  let c = contentCache.get(file);
+  if (!c || c.raw !== raw) { c = { raw, value: build(raw) }; contentCache.set(file, c); }
+  return c.value;
+}
+
+// 热读 JSON 文件：同一文件的多个读取方共享一次读/解析（D5 收敛原先 emojiGateState /
+// typingSecPerChar / selfCheckModel 三处各自为政的同构样板）。缓存见 readCached——按内容，不看时间戳。
+// 读/解析失败原样抛出，降级语义归调用方
 export function hotJson(file, pick = (d) => d) {
-  const st = statSync(file);
-  let c = hotDocs.get(file);
-  if (!c || c.mtimeNs !== st.mtimeNs || c.size !== st.size) {
-    c = { mtimeNs: st.mtimeNs, size: st.size, doc: JSON.parse(readFileSync(file, 'utf8')) };
-    hotDocs.set(file, c);
-  }
-  return pick(c.doc);
+  return pick(readCached(file, (raw) => JSON.parse(raw)));
 }
 
 // 审计告警（D12 脱敏版）：出站敏感信息命中、禁词命中。

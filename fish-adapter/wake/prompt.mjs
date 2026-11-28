@@ -2,80 +2,62 @@
 // 零工具形态下模型读不了盘 → persona.md 由适配器读好全文内嵌（每次读最新，支持热改人格）
 // 消息段直接复用 inbound 组装好的 <group_message>/<private_message> 边界标记段（正则提取，
 // 剥掉每条自带的头尾声明，整批只包一层——不可信数据边界声明不能因为拼批而稀释）
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { renderNotes } from '../lib/sticky.mjs';
 import { fillPlaceholders } from '../lib/placeholder.mjs';
-import { log } from '../lib/util.mjs';
+import { log, readCached } from '../lib/util.mjs';
 
 const SEG_RE = /<(?:group|private)_message[\s\S]*?<\/(?:group|private)_message>/g;
 
 // 认人名册（2026-11-27，借鉴 MaiBot 画像层的砍形态版）：只取 confirmed 的稳定公开事实
 // （昵称/活跃度/与鱼互动），让鱼"看到昵称知道是谁"——不做行为归纳（AI 归纳性格/口头禅错误
 // 率高，错误画像经人工批准后固化比没有更糟）。闸门与 vocab 同构：学习任务只产 candidate，
-// 注入只取 confirmed——未审条目物理上到不了鱼眼前。mtime 缓存按群拆行（命中时零解析）。
-let rosterCache = { key: 0n, size: 0, byGroup: new Map() };
+// 注入只取 confirmed——未审条目物理上到不了鱼眼前。按群拆行；缓存按内容（util.readCached）。
 const ACTIVITY_LABEL = { high: '常在', mid: '偶尔在', low: '少来' };
 function renderRoster(chatKey, personaDir) {
   if (!String(chatKey ?? '').startsWith('g:')) return ''; // 私聊不注名册（主人的画像在 core.md）
   const group = String(chatKey).slice(2);
   try {
-    const p = join(personaDir, 'memory', 'roster.json');
-    const st = statSync(p);
-    // 缓存键用 mtimeNs（BigInt 纳秒）：mtimeMs 毫秒精度在"写完立刻读"场景会撞车（同毫秒两次写
-    // 内容不同却判未变——测试 P12/P16e 间歇失败实锤）；size 一并入键，双保险
-    if (st.mtimeNs !== rosterCache.key || st.size !== rosterCache.size) {
-      const j = JSON.parse(readFileSync(p, 'utf8'));
+    const { byGroup } = readCached(join(personaDir, 'memory', 'roster.json'), (raw) => {
+      const entries = JSON.parse(raw).entries;
       const byGroup = new Map();
-      for (const e of (Array.isArray(j.entries) ? j.entries : [])) {
+      for (const e of (Array.isArray(entries) ? entries : [])) {
         if (e?.status !== 'confirmed' || e?.uid == null || e?.source == null) continue;
         const list = byGroup.get(String(e.source)) ?? [];
         list.push(`- ${String(e.nick ?? e.uid)}（${ACTIVITY_LABEL[e.activity] ?? '在'}）：${String(e.note ?? '').slice(0, 30)}`);
         byGroup.set(String(e.source), list);
       }
       for (const [g, list] of byGroup) byGroup.set(g, list.slice(0, 8).join('\n')); // 注入上限 8 人
-      rosterCache = { key: st.mtimeNs, size: st.size, byGroup };
-    }
-    return rosterCache.byGroup.get(group) ?? '';
+      return { byGroup };
+    });
+    return byGroup.get(group) ?? '';
   } catch { return ''; } // 无名册文件 = 功能未启用
 }
 
 // 长期记忆 + 行话注入（2026-11-28，P0 记忆断链修复）：core.md 与 vocab.json 的 confirmed 此前
 // 只有已退役的信箱任务书读它们，秒回链路从未读取——学习/审校链路辛苦产出的资产，鱼开口时看不到。
-// 注入纪律与名册同构：mtime 缓存（命中零解析）、只读人工确认过的内容（candidate 物理上进不来）、
-// 读取失败降级空串（记忆缺失不装死）。变更频率周级（人工审阅才变）→ 放 persona 后稳定前缀区。
+// 注入纪律与名册同构：只读人工确认过的内容（candidate 物理上进不来）、读取失败降级空串（记忆缺失
+// 不装死）。变更频率周级（人工审阅才变）→ 放 persona 后稳定前缀区。
+// 缓存一律 util.readCached（按内容，不看时间戳）：2026-11-28 这四处曾拿 st.mtimeNs 当缓存键——该字段在
+// statSync 不带 { bigint: true } 时是 undefined，刷新条件静默退化成"只剩大小"，转正这类等长改写永不刷新
 const CORE_MAX_LINES = 60; // 与 memory-review 的 core.md 红线一致
-// 缓存键 mtimeNs（BigInt 纳秒）+ size：mtimeMs 毫秒精度在"写完立刻读"场景会撞车（同毫秒两次
-// 写不同内容判未变——测试 P12/P16e 间歇失败实锤），纳秒键 + 双保险根治
-let coreCache = { key: 0n, size: 0, text: '' };
 function coreDigest(personaDir) {
   try {
-    const p = join(personaDir, 'memory', 'core.md');
-    const st = statSync(p);
-    if (st.mtimeNs !== coreCache.key || st.size !== coreCache.size) {
-      const lines = readFileSync(p, 'utf8')
-        .split(/\r?\n/)
-        .filter((l) => l.trim() && !l.startsWith('#') && !l.startsWith('>')); // 跳过标题/格式说明行
-      coreCache = { key: st.mtimeNs, size: st.size, text: lines.slice(0, CORE_MAX_LINES).join('\n') };
-    }
-    return coreCache.text;
+    return readCached(join(personaDir, 'memory', 'core.md'), (raw) => raw
+      .split(/\r?\n/)
+      .filter((l) => l.trim() && !l.startsWith('#') && !l.startsWith('>')) // 跳过标题/格式说明行
+      .slice(0, CORE_MAX_LINES).join('\n'));
   } catch { return ''; } // 无 core.md = 还没有长期记忆
 }
 
-let vocabCache = { key: 0n, size: 0, text: '' };
 function vocabDigest(personaDir) {
   try {
-    const p = join(personaDir, 'memory', 'vocab.json');
-    const st = statSync(p);
-    if (st.mtimeNs !== vocabCache.key || st.size !== vocabCache.size) {
-      const j = JSON.parse(readFileSync(p, 'utf8'));
-      const lines = (Array.isArray(j.entries) ? j.entries : [])
-        .filter((e) => e?.status === 'confirmed' && e?.word)
-        .slice(0, 20) // 审校侧 confirmed ≤20 名额，这里兜底同值
-        .map((e) => `- ${String(e.word).slice(0, 20)}：${String(e.meaning ?? '').slice(0, 60)}`);
-      vocabCache = { key: st.mtimeNs, size: st.size, text: lines.join('\n') };
-    }
-    return vocabCache.text;
+    return readCached(join(personaDir, 'memory', 'vocab.json'), (raw) => (Array.isArray(JSON.parse(raw).entries) ? JSON.parse(raw).entries : [])
+      .filter((e) => e?.status === 'confirmed' && e?.word)
+      .slice(0, 20) // 审校侧 confirmed ≤20 名额，这里兜底同值
+      .map((e) => `- ${String(e.word).slice(0, 20)}：${String(e.meaning ?? '').slice(0, 60)}`)
+      .join('\n'));
   } catch { return ''; } // 无 vocab.json = 行话库未启用
 }
 
@@ -83,18 +65,14 @@ export function fishpondDir(cfg, pkgRoot) {
   return cfg.bridge?.fishpondDir ?? join(pkgRoot, 'fishpond');
 }
 
-// 表情索引摘要（mtime 缓存：索引没变不重建）。零工具形态读不了盘 → 适配器代读嵌入 prompt。
+// 表情索引摘要：零工具形态读不了盘 → 适配器代读嵌入 prompt。
 // 2026-11-21 补：表情指引原先只在信箱任务书里，切秒回链路后随信箱一起消失 → 600 条发言 0 表情
-let emojiCache = { mtime: 0, text: '' };
 function emojiDigest(personaDir) {
   try {
-    const p = join(personaDir, 'emojis', 'index.json');
-    const st = statSync(p);
-    if (st.mtimeMs === emojiCache.mtime) return emojiCache.text;
-    const idx = JSON.parse(readFileSync(p, 'utf8'));
-    const lines = Object.entries(idx).slice(0, 30).map(([k, v]) => `  ${k}｜${String(typeof v === 'string' ? v : v?.desc ?? '').slice(0, 46)}`);
-    emojiCache = { mtime: st.mtimeMs, text: lines.join('\n') };
-    return emojiCache.text;
+    return readCached(join(personaDir, 'emojis', 'index.json'), (raw) => Object.entries(JSON.parse(raw))
+      .slice(0, 30)
+      .map(([k, v]) => `  ${k}｜${String(typeof v === 'string' ? v : v?.desc ?? '').slice(0, 46)}`)
+      .join('\n'));
   } catch (e) { log('wake', `WARN 表情索引读取失败，本轮 prompt 不带表情段（"600 条 0 表情"修复成果会无声退化）: ${e.message}`); return ''; }
 }
 
