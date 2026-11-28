@@ -12,7 +12,7 @@
 //       盘坏后重配 token 约 5 分钟，密钥不落第二处。排除清单是裁决记录，不是遗漏。
 // 恢复：见 fish-adapter/README「备份与恢复」——游标文件必须与 chat.jsonl 成对恢复（错位=学习进度漂移）。
 // 测试：FISH_ADAPTER_ROOT / FISH_BACKUP_DEST 两个环境变量均可注入（test-backup.mjs 用 mkdtemp 隔离）。
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,7 +48,13 @@ const COLLECT = [
 // 白名单外一律不收：attachments/.inbox/.outbox/.zcode（短缓存）、adapter.log/wake-trace.jsonl（可丢大日志）、
 // config.json 与 fish-adapter/backups/（密钥副本——用户裁决不备，见头注释）
 
+function isUnder(p, root) {
+  const np = resolve(p), nr = resolve(root);
+  return np === nr || np.startsWith(nr + '\\') || np.startsWith(nr + '/');
+}
+
 function walkCollect(dir, rel, out) {
+  if (isUnder(dir, DEST_FINAL)) return; // P3-⑤ 剪枝：--dest 误指收集范围内部时防快照自嵌套膨胀
   let items;
   try { items = readdirSync(dir, { withFileTypes: true }); } catch { return; } // 目录不存在=未启用，静默跳过
   for (const it of items) {
@@ -95,7 +101,39 @@ function pruneOld() {
   return pruned;
 }
 
+// P3-⑥ 备份锁：并发 --run 会竞态 rmSync(snapDir)（半状态快照）。'wx' 独占创建原子；
+// 残留锁（进程被杀）60s 后视为过期强制清——--run 总时长 <5s，阈值远大于正常持锁
+function acquireBackupLock() {
+  const LOCK = join(DEST_FINAL, '.backup.lock');
+  try {
+    if (existsSync(LOCK)) {
+      const age = Date.now() - statSync(LOCK).mtimeMs;
+      if (age < 60_000) return `另一次备份进行中（锁龄 ${Math.round(age / 1000)}s）——稍后重试`;
+      rmSync(LOCK);
+    }
+    closeSync(openSync(LOCK, 'wx'));
+    return null;
+  } catch (e) {
+    if (e.code === 'EEXIST') return '另一次备份进行中——稍后重试';
+    return String(e.message);
+  }
+}
+
 function doRun() {
+  const lockErr = acquireBackupLock();
+  if (lockErr) {
+    if (asJson) console.log(JSON.stringify({ ok: false, error: lockErr }));
+    else console.error('[中止] ' + lockErr);
+    process.exit(1);
+  }
+  try {
+    runSnapshot();
+  } finally {
+    try { rmSync(join(DEST_FINAL, '.backup.lock')); } catch { /* 释放失败随它去（stale 检测兜底） */ }
+  }
+}
+
+function runSnapshot() {
   const files = collectFiles();
   if (!files.length) {
     const msg = `没有可备份的文件（FISHPOND=${FISHPOND} 不存在？）`;

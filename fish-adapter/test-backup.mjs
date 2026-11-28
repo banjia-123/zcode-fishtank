@@ -5,7 +5,7 @@
 // 跑法：node test-backup.mjs，退出码 0 = 全过
 import './test-setup.mjs';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -109,6 +109,32 @@ try {
   const r8 = run(['--run', '--json']);
   const j8 = jsonOf(r8.stdout);
   ok(r8.status === 0 && !j8.warnings?.length, 'B8 修复源后零警告（重跑自愈）');
+
+  // B9 自嵌套剪枝（P3-⑤）：--dest 误指 fishpond 内部 → backup 子树不进收集，正常文件照收
+  const innerDest = join(ws, 'fishpond/backups-inside');
+  mkdirSync(innerDest, { recursive: true });
+  mkdirSync(join(innerDest, 'backup-2020-01-01'), { recursive: true });
+  writeFileSync(join(innerDest, 'backup-2020-01-01', 'junk.json'), '{}', 'utf8');
+  const r9 = spawnSync(process.execPath, [SCRIPT, '--run', '--json', '--dest', innerDest], {
+    encoding: 'utf8', timeout: 60_000,
+    env: { ...process.env, FISH_ADAPTER_ROOT: ROOT, FISH_BACKUP_DEST: dest },
+  });
+  const j9 = jsonOf(r9.stdout);
+  ok(r9.status === 0 && j9?.ok === true, 'B9a 内嵌目的地 --run 正常', r9.stdout.slice(0, 120));
+  ok(!existsSync(join(j9.snapshot, 'fishpond/backups-inside')), 'B9b 目的地子树被剪枝（不自嵌套）');
+  ok(existsSync(join(j9.snapshot, 'fishpond/memory/core.md')), 'B9c 正常文件照收');
+  rmSync(innerDest, { recursive: true, force: true });
+
+  // B10 并发锁（P3-⑥）：新锁拒跑 / stale 锁强制清后照常
+  writeFileSync(join(dest, '.backup.lock'), '', 'utf8');
+  const r10 = run(['--run', '--json']);
+  const j10 = jsonOf(r10.stdout);
+  ok(r10.status === 1 && j10?.ok === false && /另一次备份进行中/.test(j10.error ?? ''), 'B10a 持有中的锁拒跑', r10.stdout.slice(0, 120));
+  const old = new Date(Date.now() - 120_000);
+  utimesSync(join(dest, '.backup.lock'), old, old);
+  const r10b = run(['--run', '--json']);
+  const j10b = jsonOf(r10b.stdout);
+  ok(r10b.status === 0 && j10b?.ok === true && !existsSync(join(dest, '.backup.lock')), 'B10b 60s+ stale 锁强制清后照常跑（释放干净）', r10b.stdout.slice(0, 120));
 } finally {
   try { rmSync(ws, { recursive: true, force: true }); } catch { /* 临时目录 */ }
   try { rmSync(dest, { recursive: true, force: true }); } catch { /* 临时目录 */ }
