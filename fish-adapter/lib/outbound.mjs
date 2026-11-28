@@ -19,6 +19,10 @@ const EMOJI_MARK = /\[表情[:：]\s*([^\]]{1,120}?)\s*\]/g;
 // 简写标记 [欸嘿嘿.jpg]（2026-11-22 模型格式漂移实测：教的是 [表情: xxx]，她偷懒省前缀——
 // 字面文本漏出站两次后补的宽容解析）。库里存在才解析，不存在保留字面（不误伤真想发 [xx.jpg] 文字的场景）
 const EMOJI_SHORT = /\[([^\[\]]{1,40}\.(?:jpe?g|png|gif|webp))\]/gi;
+// 全角括号（叼猎物.png）（2026-11-28 第三次漂移实测：群内全角括号文化（）强势，她连发三条把图名写进
+// 全角括号当"发图"，字面漏出站——选图没错（索引描述与语境吻合），发送形态错）。处置对齐简写漂移：
+// 库里存在才转图，不存在保留字面；半角圆括号不收（英文正文括号注释常见，误伤面大）
+const EMOJI_SHORT_FULL = /（([^（）]{1,40}\.(?:jpe?g|png|gif|webp))）/g;
 
 // 表情文件名 → 库内绝对路径；不合法/不存在返回 null（降级纯文本）
 function resolveEmojiFile(cfg, name) {
@@ -44,6 +48,12 @@ function stripEmojiMarks(rawText, cfg, chatKey) {
   for (const m of [...text.matchAll(EMOJI_SHORT)]) {
     if (resolveEmojiFile(cfg, m[1])) {
       log('outbound', `emoji shorthand accepted: "${m[1].slice(0, 60)}"（简写漂移，按表情发）`);
+      text = text.replace(m[0], '');
+    }
+  }
+  for (const m of [...text.matchAll(EMOJI_SHORT_FULL)]) {
+    if (resolveEmojiFile(cfg, m[1])) {
+      log('outbound', `emoji fullwidth-paren accepted: "${m[1].slice(0, 60)}"（全角括号漂移，按表情发）`);
       text = text.replace(m[0], '');
     }
   }
@@ -308,7 +318,18 @@ export function createOutbound(cfg, onebot, inboundState) {
     let joinedRaw;
     let textLines;
     let truncated = 0;
+    let inlineEmoji = null; // 行内标记兜底提取的结果（isNew 分支赋值；sticker 字段显式给出时仍优先）
     if (isNew) {
+      // 行内标记兜底提取（2026-11-28）：模型把表情写在 lines 里（而非 sticker 字段）是常态——
+      // 此前新格式只认 sticker 字段，行内 [表情: xxx]/[xxx.ext]/（xxx.ext）一律只剥不转图，图静默丢失
+      // （11-28 实战：全角括号三连漏字面）。先提取后剥除；sticker 字段显式给出时仍优先（含非法降级语义）
+      for (const s of batch.lines) {
+        const t = String(s);
+        for (const m of [...t.matchAll(EMOJI_MARK), ...t.matchAll(EMOJI_SHORT), ...t.matchAll(EMOJI_SHORT_FULL)]) {
+          const p = resolveEmojiFile(cfg, m[1].trim());
+          if (p && !inlineEmoji) inlineEmoji = p;
+        }
+      }
       const wanted = batch.lines.filter((s) => typeof s === 'string' && s.trim()).map((s) => stripEmojiMarks(String(s).trim(), cfg)).filter(Boolean);
       if (wanted.length > 5) {
         truncated += wanted.length - 5;
@@ -324,11 +345,11 @@ export function createOutbound(cfg, onebot, inboundState) {
       joinedRaw = String(batch.text ?? '');
     }
     const emoji0 = isNew
-      ? { text: joinedRaw, emojiPath: batch.sticker != null ? resolveEmojiFile(cfg, batch.sticker) : null }
+      ? { text: joinedRaw, emojiPath: batch.sticker != null ? resolveEmojiFile(cfg, batch.sticker) : inlineEmoji }
       : (() => {
           const stripped = stripEmojiMarks(joinedRaw, cfg);
           let emojiPath = null;
-          for (const m of [...joinedRaw.matchAll(EMOJI_MARK), ...joinedRaw.matchAll(EMOJI_SHORT)]) {
+          for (const m of [...joinedRaw.matchAll(EMOJI_MARK), ...joinedRaw.matchAll(EMOJI_SHORT), ...joinedRaw.matchAll(EMOJI_SHORT_FULL)]) {
             const p = resolveEmojiFile(cfg, m[1].trim());
             if (p && !emojiPath) emojiPath = p;
           }

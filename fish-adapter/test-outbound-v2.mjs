@@ -337,6 +337,41 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   unlinkSync(join(STATE_ROOT, 'config.json')); // 还原默认（后续无 config 读取方，防未来用例被污染）
 }
 
+// 全角括号漂移（2026-11-28 第三次格式漂移实测：她把图名写进全角括号当"发图"，字面漏出站三连
+// ——（叼猎物.png）02:52/02:54/02:56 连发）。处置对齐 11-22 简写漂移：库里存在才转图，不存在保留字面
+{
+  writeFileSync(join(STATE_ROOT, 'config.json'), JSON.stringify({ emojiGate: { enabled: true, cooldownSec: 600 } }));
+  const hasImg = (n) => segs(n).some((c) => c.p.message.some((x) => x.type === 'image'));
+  const textOf = (n) => segs(n).map((c) => c.p.message.filter((x) => x.type === 'text').map((x) => x.data.text).join('')).join('');
+  writeFileSync(join(tmp, 'emojis', '独处.png'), 'png'); // FR 组专用图（与 CD 组冷却记录隔离）
+
+  // FR1：全角括号+库内图 → 转图发送，字面剥除
+  const bF1 = calls.length;
+  const rF1 = await outbound.processMessage({ lines: ['吾持保留意见。（独处.png）'] }, meta('930', 'fr1.json'));
+  ok(rF1.action === 'sent' && hasImg(bF1), 'FR1 全角括号库内图转表情发送', JSON.stringify(rF1));
+  ok(!textOf(bF1).includes('独处.png'), 'FR1b 全角括号字面已剥除（不再漏出站）', textOf(bF1).slice(-80));
+
+  // FR2：全角括号+库外图名 → 不转图，字面保留（不误伤真括号文字）
+  const bF2 = calls.length;
+  const rF2 = await outbound.processMessage({ lines: ['这个梗（不存在图.png）挺好笑'] }, meta('930', 'fr2.json'));
+  ok(rF2.action === 'sent' && !hasImg(bF2), 'FR2 库外全角括号不转图');
+  ok(textOf(bF2).includes('（不存在图.png）'), 'FR2b 库外全角括号字面保留', textOf(bF2).slice(-80));
+
+  // FR3：半角圆括号 (独处.png) → 不解析，字面保留（半角不收：英文正文括号注释常见）
+  const bF3 = calls.length;
+  const rF3 = await outbound.processMessage({ lines: ['半角试试 (独处.png)'] }, meta('930', 'fr3.json'));
+  ok(rF3.action === 'sent' && !hasImg(bF3), 'FR3 半角圆括号不转图');
+  ok(textOf(bF3).includes('(独处.png)'), 'FR3b 半角括号字面保留', textOf(bF3).slice(-80));
+
+  // FR4：全角转图落 speak.jsonl → 同图冷却联动（600s 内同群同图 → 拦，剥字面降纯文本）
+  const bF4 = calls.length;
+  const rF4 = await outbound.processMessage({ lines: ['再发一次。（独处.png）'] }, meta('930', 'fr4.json'));
+  ok(rF4.action === 'sent' && !hasImg(bF4), 'FR4 全角转图进冷却体系：600s 内同图被拦（FR1 已发过独处.png）');
+  ok(!textOf(bF4).includes('独处.png'), 'FR4b 被拦后字面也剥除', textOf(bF4).slice(-80));
+
+  unlinkSync(join(STATE_ROOT, 'config.json')); // 还原默认
+}
+
 // OS 首段剥除（2026-11-26）：独白混进正文首段时剥段保留正文（11-22/11-26 两次实战形态）
 {
   ok(stripOsHead('被 @ 了，得回。\n\n新图金发紫瞳，真不是灯。\n\n但不装懂。', 'g:1') === '新图金发紫瞳，真不是灯。\n\n但不装懂。', 'OS1a 被@独白首段剥除、正文保留');
