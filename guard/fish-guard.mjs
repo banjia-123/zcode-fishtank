@@ -28,7 +28,13 @@ function fireLog(obj) {
   } catch { /* 日志失败不阻断判定 */ }
 }
 
-function allow() { process.exit(0); }
+// 放行也留痕（2026-11-28）：此前只在拒绝时记录，于是"守卫到底有没有在任务会话里被调用过"无从查证——
+// 一道证明不了自己在工作的防线等于没有。每次工具调用一行（tool + 鱼缸内相对路径 + 会话 ID）；
+// 任务的工具调用量很小（每次几十行），日志增长可忽略
+function allow(note) {
+  if (note) fireLog({ phase: 'allow', ...note });
+  process.exit(0);
+}
 function deny(reason) {
   // ev 可能未定义（stdin 解析失败路径先于赋值就调 deny）——可选链防 deny 自身崩溃：
   // 崩了虽大概率仍非零退出，但 permissionDecision 协议和 fireLog 审计会一起丢
@@ -101,7 +107,8 @@ try {
     }
   }
 
-  allow();
+  // 全部检查通过：留痕后放行。记鱼缸内的相对路径（不记绝对路径），截断防单行过长
+  allow({ by: 'checks', tool, files: paths.map((p) => relInsideFishpond(p)).filter(Boolean).map((r) => r.slice(0, 120)), sessionId: sid });
 } catch (e) {
   deny(`guard 异常: ${e.message}`);
 }

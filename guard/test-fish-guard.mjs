@@ -89,7 +89,13 @@ try {
     const r = guard(ev);
     ok(!/guard 异常/.test(r.reason) && r.decision !== '?', `FG20 守卫内部无异常（${ev.tool_name} ${ev.tool_input.file_path ?? ''}）`, r.reason + r.stderr.slice(0, 120));
   }
-  ok(readFileSync(LOG, 'utf8').includes('受保护文件不可写'), 'FG21 拒绝记录写进注入的日志文件（没写进仓库目录）');
+  // 日志落在了注入的位置，没写进仓库；拒绝与放行都留痕——放行不留痕的话，"守卫有没有在会话里被调用过"无从查证
+  const log = readFileSync(LOG, 'utf8');
+  const logLines = log.trim().split('\n').map((l) => { try { return JSON.parse(l); } catch { return {}; } });
+  ok(logLines.some((j) => j.phase === 'deny' && String(j.reason).includes('受保护文件不可写')), 'FG21 拒绝记录写进注入的日志文件（没写进仓库目录）');
+  ok(logLines.some((j) => j.phase === 'allow' && j.by === 'checks' && j.tool === 'Read' && j.files?.join() === 'memory/vocab.json' && j.sessionId === 'sess_fish'), 'FG22 放行也留痕：工具、鱼缸内相对路径、会话 ID', JSON.stringify(logLines.filter((j) => j.phase === 'allow').slice(-1)));
+  ok(logLines.some((j) => j.phase === 'allow' && j.by === 'whitelist' && j.sessionId === 'sess_worker'), 'FG22b 白名单放行留痕（原有行为）');
+  ok(!log.split('\n').some((l) => l.includes('"phase":"allow"') && l.includes('"by":"checks"') && l.includes(root)), 'FG22c 放行记录不含绝对路径');
 } finally {
   try { rmSync(root, { recursive: true, force: true }); } catch { /* 临时目录 */ }
 }
