@@ -1416,9 +1416,22 @@ function titleKindOf(title) {
 // +2 容忍带：AI 数行有 off-by-one 固有误差（11-22 实测重学 42 行写 2199，实际 2198），1~2 行无害自愈
 function learnBacklog() {
   try {
-    const cursor = Number(readFileSync(join(FISHPOND, 'memory', '.learner-cursor'), 'utf8').trim());
+    const cursorPath = join(FISHPOND, 'memory', '.learner-cursor');
+    const cursor = Number(readFileSync(cursorPath, 'utf8').trim());
     const chatLines = chatJsonlLines(); // mtime 缓存（chatJsonlLines 注释）
-    return { cursor, chatLines, unlearned: Math.max(0, chatLines - cursor), cursorOverflow: cursor > chatLines + 2 };
+    // 代码硬闸补位（2026-11-28 三犯 24812484=新旧值拼接指纹）：apiTaskRun 出口的钳制只覆盖
+    // 手动触发，cron 轮次绕过硬闸——status 端点被前端高频轮询时兜底回拨，任何触发路径都会被这里自愈
+    let effective = cursor;
+    if (cursor > chatLines + 2) {
+      try {
+        const tmp = cursorPath + '.tmp';
+        writeFileSync(tmp, String(chatLines), 'utf8');
+        renameSync(tmp, cursorPath);
+        logConsoleOp('learner-cursor-clamp', { from: cursor, to: chatLines, note: 'learnBacklog 兜底回拨（非 apiTaskRun 路径写入）' });
+        effective = chatLines;
+      } catch { /* 回拨失败维持标红 */ }
+    }
+    return { cursor: effective, chatLines, unlearned: Math.max(0, chatLines - effective), cursorOverflow: effective > chatLines + 2 };
   } catch { return null; }
 }
 
