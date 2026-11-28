@@ -7,7 +7,7 @@
 //    审校脚本改；鱼能写它们等于能给自己改记忆、改任务指令、关守卫
 // ⑤ 受保护文件（2026-11-28）：fishpond 内有几种文件只许人工/审校脚本改——鱼能写它们等于能给自己
 //    改记忆（core.md）、改任务指令（任务书）、关守卫（hooks 配置）。写类工具命中一律 deny，读不受限
-import { readFileSync, realpathSync, appendFileSync } from 'node:fs';
+import { readFileSync, realpathSync, appendFileSync, statSync, renameSync } from 'node:fs';
 import { relative, isAbsolute, resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,15 +22,19 @@ let pondOk = true;
 try { ROOT = realpathSync(ROOT); } catch { pondOk = false; /* 鱼缸未建/不可达：下方一律 deny */ }
 const FIRE_LOG = process.env.FISH_GUARD_LOG || join(GUARD_DIR, 'hook-fire.log');
 
+const FIRE_LOG_MAX = 2 * 1024 * 1024; // 轮转阈值 2MB：一天几百行 ≈ 100KB，约 3 周一转；只留一代 .1（留痕够回查近期）
 function fireLog(obj) {
   try {
+    // 轮转（2026-11-28 挂账销账）：append 前 statSync，超限把当前文件改名 .1（顶掉旧一代）再写新文件。
+    // hook 进程本就短命，每次多一次 statSync 可忽略；文件还不存在 = 无需轮转
+    try { if (statSync(FIRE_LOG).size > FIRE_LOG_MAX) renameSync(FIRE_LOG, FIRE_LOG + '.1'); } catch { /* 无文件 = 无需轮转 */ }
     appendFileSync(FIRE_LOG, JSON.stringify({ ts: new Date().toISOString(), pid: process.pid, ...obj }) + '\n');
   } catch { /* 日志失败不阻断判定 */ }
 }
 
 // 放行也留痕（2026-11-28）：此前只在拒绝时记录，于是"守卫到底有没有在任务会话里被调用过"无从查证——
 // 一道证明不了自己在工作的防线等于没有。每次工具调用一行（tool + 鱼缸内相对路径 + 会话 ID）；
-// 任务的工具调用量很小（每次几十行），日志增长可忽略
+// 任务的工具调用量很小（每次几十行），日志增长可忽略；超 2MB 自动轮转留一代（fireLog 处）
 function allow(note) {
   if (note) fireLog({ phase: 'allow', ...note });
   process.exit(0);

@@ -1593,6 +1593,12 @@ function strayHtml(s) {
   return `<div style="font-size:11px;color:#e07b7b;margin-top:4px">⚠ 任务动了任务书之外的文件：${parts.join('、')}${s.concurrent ? '（另一任务同时在跑，可能是它写的）' : ''}</div>`;
 }
 
+// 任务会话 ID（2026-11-28 挂账销账）：任务跑完保留 ZCode sessionId——事后要翻原会话排查
+// "模型当时到底干了什么"时，复制这串去会话工具里定位（控制台不做打开会话功能，给到 id 即可）
+function sessIdHtml(run) {
+  return run?.sessionId ? `<div style="font-size:10.5px;color:var(--mute);margin-top:2px">会话 <span style="user-select:all">${esc(String(run.sessionId))}</span></div>` : '';
+}
+
 function runStatusText(run, kind) {
   if (!run || run.status === 'error' && !run.error && !run.finishedAt) return '<span style="color:var(--mute)">还没跑过——点下面按钮开始第一次</span>';
   if (run.status === 'running') {
@@ -1600,9 +1606,9 @@ function runStatusText(run, kind) {
       <div style="font-size:11px;color:var(--mute);margin-top:4px">${kind === 'learn' ? '读积压消息提取行话，可能要几分钟（满推理）' : '写今天的吐槽日记，一两分钟'}——完成后自动刷新</div>`;
   }
   if (run.status === 'done') {
-    return `<div><span class="send-ok">✓ 上次完成</span> <span class="send-meta">耗时 ${fmtMs(run.elapsedMs)}${run.finishedAt ? ' · ' + new Date(run.finishedAt).toTimeString().slice(0, 5) : ''}</span></div>${strayHtml(run.stray)}`;
+    return `<div><span class="send-ok">✓ 上次完成</span> <span class="send-meta">耗时 ${fmtMs(run.elapsedMs)}${run.finishedAt ? ' · ' + new Date(run.finishedAt).toTimeString().slice(0, 5) : ''}</span></div>${sessIdHtml(run)}${strayHtml(run.stray)}`;
   }
-  return `<div><span class="send-bad">✗ 上次出错</span></div><div class="send-meta">${esc(run.error ?? '')}</div><div style="font-size:10.5px;color:var(--mute)">可重试</div>${strayHtml(run.stray)}`;
+  return `<div><span class="send-bad">✗ 上次出错</span></div><div class="send-meta">${esc(run.error ?? '')}</div><div style="font-size:10.5px;color:var(--mute)">可重试</div>${sessIdHtml(run)}${strayHtml(run.stray)}`;
 }
 
 // 触发 + 运行期间 5s 轮询

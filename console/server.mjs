@@ -280,8 +280,8 @@ function taskUsageForDay(date) {
   const r = readJsonlTail(TASK_USAGE, 256 * 1024);
   if (r.state !== 'ready') return agg;
   for (const row of r.rows) {
-    if (!row || localDay(row.ts) !== date) continue;
-    const u = row.usage ?? {};
+    if (!row || !row.usage || localDay(row.ts) !== date) continue; // 无 usage 行（error 审计行，2026-11-28 起流水也记 error）不进 token 统计
+    const u = row.usage;
     agg.input += u.inputTokens ?? 0;
     agg.output += u.outputTokens ?? 0;
     agg.cacheRead += u.cacheReadTokens ?? 0;
@@ -1370,25 +1370,27 @@ function effectiveTaskModel(kind) {
 
 // —— chat.jsonl 热读（审计专项债修复）：apiTaskStatus 处于任务运行期 5 秒轮询路径，原先每次
 // 整文件读 + split 数行/逐行 parse（成本随聊天日志线性增长，违背文件头"绝不整文件读"铁律）。
-// mtime 缓存摊销：文件没变（群里没新消息）直接复用上次结果——只有真来了新消息才重算一次。
-let chatLinesCache = { mtime: 0, lines: 0 };
+// (mtimeMs, size) 双键缓存（2026-11-28 挂账销账）：mtimeMs 单键在"同毫秒追加两条"时不刷新
+// （积压显示差 1 行）；chat.jsonl 是 append-only，行数变化必然带来 size 变化——双键都命中才复用
+let chatLinesCache = { mtime: 0, size: -1, lines: 0 };
 function chatJsonlLines() {
   const st = statSync(join(FISHPOND, 'logs', 'chat.jsonl'));
-  if (st.mtimeMs === chatLinesCache.mtime) return chatLinesCache.lines;
-  chatLinesCache = { mtime: st.mtimeMs, lines: readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length };
+  if (st.mtimeMs === chatLinesCache.mtime && st.size === chatLinesCache.size) return chatLinesCache.lines;
+  chatLinesCache = { mtime: st.mtimeMs, size: st.size, lines: readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n').filter((l) => l.trim()).length };
   return chatLinesCache.lines;
 }
-// 今日消息数（日记积压用）：mtime + 本地日双 key 缓存（跨午夜失效），避开轮询路径的逐行 parse
-let todayMsgCache = { mtime: 0, day: '', count: 0 };
+// 今日消息数（日记积压用）：(mtimeMs, size) + 本地日三 key 缓存（跨午夜失效；size 防同毫秒
+// 追加不刷新——同 chatJsonlLines 的账），避开轮询路径的逐行 parse
+let todayMsgCache = { mtime: 0, size: -1, day: '', count: 0 };
 function todayMessageCount(dayStr) {
   const st = statSync(join(FISHPOND, 'logs', 'chat.jsonl'));
-  if (st.mtimeMs === todayMsgCache.mtime && todayMsgCache.day === dayStr) return todayMsgCache.count;
+  if (st.mtimeMs === todayMsgCache.mtime && st.size === todayMsgCache.size && todayMsgCache.day === dayStr) return todayMsgCache.count;
   let n = 0;
   for (const l of readFileSync(join(FISHPOND, 'logs', 'chat.jsonl'), 'utf8').split('\n')) {
     if (!l.trim()) continue;
     try { if (localDay(new Date(JSON.parse(l).ts)) === dayStr) n++; } catch { /* 坏行跳过 */ }
   }
-  todayMsgCache = { mtime: st.mtimeMs, day: dayStr, count: n };
+  todayMsgCache = { mtime: st.mtimeMs, size: st.size, day: dayStr, count: n };
   return n;
 }
 
@@ -1613,14 +1615,25 @@ async function runTaskAsync(kind) {
       logConsoleOp('task-stray', { kind, status, ...stray });
       console.log(`[task-stray] ${kind} 任务动了任务书之外的文件: ${JSON.stringify(stray)}`);
     }
-    taskRuns.set(kind, { status, startedAt: st.startedAt, finishedAt: Date.now(), outTail: outTail.slice(-500), error, ...extra, ...(stray ? { stray } : {}) });
-    // 任务 token 流水（只有 done 有 usage——失败/超时无产出不计费）：
-    if (status === 'done' && extra.usage) {
-      try {
+    // sessionId 一并保留（2026-11-28 挂账销账）：finish 重设 Map 时此前不带 sessionId，任务一结束
+    // 就查不到原会话——事后想翻"模型当时到底干了什么"没有入口（style.json 排查时踩过的盲区）。
+    // 运行中在 session/create 后已 set 进 Map，这里从 Map 捞回；create 前就失败时为 undefined，正常
+    taskRuns.set(kind, { status, startedAt: st.startedAt, finishedAt: Date.now(), outTail: outTail.slice(-500), error, sessionId: taskRuns.get(kind)?.sessionId, ...extra, ...(stray ? { stray } : {}) });
+    // 任务流水：done 行带 usage + sessionId（失败/超时无产出不计费）；error 行也落一条
+    // （sessionId + 错误摘要，无 usage）——出错正是最需要回查原会话的场景。
+    // 聚合器 taskUsageForDay 只统计带 usage 的行，error 审计行不影响 token 展示
+    try {
+      const sid = taskRuns.get(kind)?.sessionId ?? null;
+      const row = status === 'done' && extra.usage
+        ? { ts: new Date().toISOString(), kind, sessionId: sid, usage: extra.usage }
+        : status === 'error'
+          ? { ts: new Date().toISOString(), kind, sessionId: sid, status: 'error', error: String(error ?? '').slice(0, 120) }
+          : null;
+      if (row) {
         mkdirSync(dirname(TASK_USAGE), { recursive: true });
-        appendFileSync(TASK_USAGE, JSON.stringify({ ts: new Date().toISOString(), kind, usage: extra.usage }) + '\n', 'utf8');
-      } catch { /* 流水失败不影响任务结果 */ }
-    }
+        appendFileSync(TASK_USAGE, JSON.stringify(row) + '\n', 'utf8');
+      }
+    } catch { /* 流水失败不影响任务结果 */ }
     // 学习游标越界钳制（2026-11-26 二犯，2634=2234+400 精确指纹：AI 拿 offset+limit 算游标
     // 而非实际读到的行数，prompt 红线两犯无效——代码硬闸：任务完成后游标 > 实际行数即回拨+留痕）
       if (status === 'done' && kind === 'learn') {

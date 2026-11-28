@@ -206,7 +206,8 @@ if (PATROL) {
     };
     // 投递（lib/deliver.mjs）：原出站链路审计/限额/表情/分段一道不绕，外面多两层恢复——
     // ① 打回重写（2026-11-28）：草稿被缀冷却/缀-only/OS 首段拦下 → 带着原因让模型重写一版，
-    //    拿不到重写正文才降级到原来的机械处理；开关 config.rewrite.enabled（缺省开）
+    //    拿不到重写正文才降级到原来的机械处理；开关 config.rewrite.enabled（2026-11-28 拍板：
+    //    默认开，不做控制台 UI——这机制正常永远该开着，关它属于诊断动作，手改 config 足够）
     // ② defer 延迟重试：见下方
     const { out, finalText } = await deliverWithRecovery({
       process: (text, extra) => outbound.processMessage({ text }, extra ? { ...outMeta, ...extra } : outMeta),
