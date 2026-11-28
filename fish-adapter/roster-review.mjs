@@ -98,7 +98,7 @@ if (args.includes('--apply')) {
     try {
       copyFileSync(FILE, FILE + '.bak');
       const body = data.entries.map((e) => '  ' + JSON.stringify(e)).join(',\n');
-      const out = `{\n "entries": [\n${body}\n ]\n}`;
+      const out = `{\n${data.version != null ? ` "version": ${data.version},\n` : ''} "entries": [\n${body}\n ]\n}`; // 保留文件里可能存在的其他顶层字段
       JSON.parse(out); // 自校验：写出去的必须仍是合法 JSON
       writeFileSync(FILE, out, 'utf8');
       backup = FILE + '.bak';

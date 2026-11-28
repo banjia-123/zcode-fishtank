@@ -159,6 +159,16 @@ try {
   // R6 无模式参数：用法提示 exit 2
   const r6 = run(ROSTER_SCRIPT, ['--file', rFile]);
   ok(r6.status === 2 && /用法/.test(r6.stderr), 'R6 无模式参数 → 用法提示 exit 2', `status=${r6.status}`);
+
+  // R7 数字 uid 手改场景：fail-closed 拒审（loadRoster 校验 uid 必须字符串——坏数据修源，不静默归一）
+  writeFileSync(rFile, JSON.stringify({
+    entries: [{ uid: 20001, nick: '数字uid群友', activity: 'mid', note: 'x', status: 'candidate', source: '777', firstSeen: '2026-11-28' }],
+  }), 'utf8');
+  const rp7 = join(fx, 'r7.json');
+  writeFileSync(rp7, JSON.stringify({ items: [{ id: '20001', action: 'confirm' }] }), 'utf8');
+  const r7r = run(ROSTER_SCRIPT, ['--file', rFile, '--apply', '--json-file', rp7]);
+  const jr7 = jsonOf(r7r.stdout);
+  ok(r7r.status === 1 && jr7?.ok === false && /字段异常/.test(jr7.error ?? ''), 'R7 数字 uid fail-closed 拒审（uid 必须字符串）', r7r.stdout.slice(0, 120));
 } finally {
   try { rmSync(fx, { recursive: true, force: true }); } catch { /* 临时目录 */ }
 }

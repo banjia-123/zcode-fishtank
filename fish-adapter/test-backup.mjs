@@ -31,7 +31,7 @@ mkdirSync(join(ws, 'fishpond', 'attachments'), { recursive: true }); // 排除�
 
 const w = (rel, body = 'x') => { const p = join(ws, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, body, 'utf8'); };
 w('fishpond/memory/core.md', '记忆内容');
-w('fishpond/memory/.learner-cursor', '2484');
+w('fishpond/memory/.learner-cursor', '1'); // 与 fixture chat.jsonl 行数配对（B7 再改 9999 触发警告）
 w('fishpond/memory/vocab.json', '{"entries":[]}');
 w('fishpond/persona.md', '# 人格');
 w('fishpond/diary/2026-11-28.md', '# 日记');
@@ -88,6 +88,27 @@ try {
   ok(r5.status === 0 && j5?.ok === true && j5.dest === dest && Array.isArray(j5.snapshots) && j5.snapshots.length === 14
     && j5.snapshots.every((x) => /^backup-\d{4}-\d{2}-\d{2}$/.test(x.snapshot) && typeof x.bytes === 'number'),
     'B5 --status：快照清单结构（dest/keep/snapshots）', r5.stdout.slice(0, 120));
+
+  // B6 完整性校验（P2-1）：源里损坏 JSON → manifest.warnings 如实报告（不阻断）
+  w('fishpond/memory/core.md.bak', '# 记忆候选（待人工…… markdown 备份，不是 JSON）'); // .bak 内容=源类型，不校验
+  writeFileSync(join(ws, 'fishpond/memory/roster.json'), '{broken', 'utf8');
+  const r6 = run(['--run', '--json']);
+  const j6 = jsonOf(r6.stdout);
+  ok(r6.status === 0 && j6?.ok === true && Array.isArray(j6.warnings) && j6.warnings.some((x) => x.includes('roster.json') && x.includes('JSON 损坏')), 'B6 损坏 JSON 进 warnings（fail-visible 不阻断）', r6.stdout.slice(0, 160));
+  ok(JSON.parse(readFileSync(join(j6.snapshot, 'manifest.json'), 'utf8')).warnings?.length === 1, 'B6b warnings 落进 manifest（且 markdown 的 .bak 不误报）');
+
+  // B7 游标超前（P2-1）：cursor > chat.jsonl 行数 → 配对警告
+  writeFileSync(join(ws, 'fishpond/memory/.learner-cursor'), '9999', 'utf8');
+  const r7 = run(['--run', '--json']);
+  const j7 = jsonOf(r7.stdout);
+  ok(r7.status === 0 && j7.warnings?.some((x) => x.includes('.learner-cursor(9999)') && x.includes('游标超前')), 'B7 游标超前于聊天史 → 配对警告', r7.stdout.slice(0, 160));
+
+  // B8 正常路径零警告：修好源后重跑，warnings 消失
+  writeFileSync(join(ws, 'fishpond/memory/roster.json'), '{"entries":[]}', 'utf8');
+  writeFileSync(join(ws, 'fishpond/memory/.learner-cursor'), '1', 'utf8');
+  const r8 = run(['--run', '--json']);
+  const j8 = jsonOf(r8.stdout);
+  ok(r8.status === 0 && !j8.warnings?.length, 'B8 修复源后零警告（重跑自愈）');
 } finally {
   try { rmSync(ws, { recursive: true, force: true }); } catch { /* 临时目录 */ }
   try { rmSync(dest, { recursive: true, force: true }); } catch { /* 临时目录 */ }

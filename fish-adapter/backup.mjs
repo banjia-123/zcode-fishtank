@@ -29,7 +29,6 @@ const T0 = Date.now();
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
 const destIdx = args.indexOf('--dest');
-if (destIdx >= 0 && args[destIdx + 1]) { /* --dest 覆盖 DEST（env 优先级低） */ }
 const DEST_OVERRIDE = destIdx >= 0 && args[destIdx + 1] ? resolve(args[destIdx + 1]) : null;
 const DEST_FINAL = DEST_OVERRIDE ?? DEST;
 
@@ -117,13 +116,34 @@ function doRun() {
     manifest.push({ rel, bytes });
     total += bytes;
   }
+  // P2-1 完整性校验（2026-11-28 审计）：learner（ZCode automation）不持 review.lock，Edit 与
+  // copyFileSync 并发时快照可能捕获半写 JSON；游标与 chat.jsonl 也可能瞬间错配。备份里坏文件比
+  // 没备份更糟——逐个校验并如实写进 manifest.warnings（不阻断，重跑即自愈）
+  const warnings = [];
+  for (const { rel } of manifest) {
+    if (!/\.json(\.bak)?$/.test(rel)) continue; // .json 与 .json.bak 才是 JSON——.bak 内容类型=源类型（core.md.bak 是 markdown）
+    try { JSON.parse(readFileSync(join(snapDir, rel), 'utf8')); } catch (e) {
+      warnings.push(`${rel}：JSON 损坏（${String(e.message).slice(0, 60)}）——可能捕获了并发写的半状态，建议重跑备份`);
+    }
+  }
+  const chatSnap = join(snapDir, 'fishpond/logs/chat.jsonl');
+  const cursorSnap = join(snapDir, 'fishpond/memory/.learner-cursor');
+  if (existsSync(chatSnap) && existsSync(cursorSnap)) {
+    const chatLines = readFileSync(chatSnap, 'utf8').split('\n').filter(Boolean).length;
+    const cur = parseInt(readFileSync(cursorSnap, 'utf8').trim(), 10);
+    if (Number.isFinite(cur) && cur > chatLines) {
+      warnings.push(`.learner-cursor(${cur}) > chat.jsonl 行数(${chatLines})——游标超前于快照聊天史（learner 并发推游标），恢复时核对配对或等待服务端硬闸回拨`);
+    }
+  }
   writeFileSync(join(snapDir, 'manifest.json'), JSON.stringify({
     ts: new Date().toISOString(), files: manifest, totalBytes: total, count: manifest.length,
+    ...(warnings.length ? { warnings } : {}),
   }, null, 1), 'utf8');
   const pruned = pruneOld();
   const result = {
     ok: true, snapshot: snapDir, files: manifest.length, totalBytes: total,
     pruned, kept: readdirSync(DEST_FINAL).filter((n) => /^backup-/.test(n)).length,
+    ...(warnings.length ? { warnings } : {}),
     ms: Date.now() - T0,
   };
   // --json 模式 stdout 必须是纯 JSON（控制台 spawn 契约）——人读日志仅非 json 模式打
@@ -133,6 +153,7 @@ function doRun() {
     console.log(`✓ 备份完成 → ${snapDir}`);
     console.log(`  ${manifest.length} 个文件 · ${total} 字节 · 保留 ${result.kept} 份`);
     if (pruned.length) console.log(`  已清理旧快照：${pruned.join(', ')}`);
+    for (const w of warnings) console.log(`  [警告] ${w}`);
   }
 }
 
