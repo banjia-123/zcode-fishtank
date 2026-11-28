@@ -2,13 +2,14 @@
 // 字段校验（D15）/ 部分成功（D4b）/ 计数落盘（D13）/ 审计脱敏（D12）。不起真进程，mock OneBot。
 // 跑法：node test-outbound-v2.mjs，退出码 0 = 全过
 import { STATE_ROOT, cleanOnExit } from './test-setup.mjs';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync, unlinkSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInbound, isBusy } from './lib/inbound.mjs';
 import { createOutbound, typingDelayMs, shouldQuoteDecision } from './lib/outbound.mjs';
 import { stripOsHead, sweepStalePerChat } from './lib/outbound.mjs';
-import { parseOutboxBody, startOutboxPolling } from './lib/bridge.mjs';
+import { parseOutboxBody, startOutboxPolling, bridgeDirs } from './lib/bridge.mjs';
+import { sameStickerRecentlyUsed } from './lib/outbound.mjs';
 
 // 审计日志、计数器都落在 STATE_ROOT（一次性临时目录）下——测试不碰生产文件
 const AUDIT_LOG = join(STATE_ROOT, 'logs', 'audit.log');
@@ -282,6 +283,49 @@ const segs = (before) => calls.slice(before).filter((c) => c.cmd.startsWith('sen
   let rate = 0;
   for (let k = 0; k < 1000; k++) if (shouldQuoteDecision({ must: false, batchLen: 1, ageSec: 1 })) rate += 1;
   ok(rate > 120 && rate < 280, 'Q5 闲聊挂引用概率约 20%（1000 次采样）', `rate=${rate / 10}%`);
+}
+
+// 同图冷却（2026-11-28，P2 借鉴 MaiBot 600s 降权）：同 chatKey 同 basename 冷却窗内不重发
+{
+  mkdirSync(join(tmp, 'logs'), { recursive: true }); // recordSpeak 落盘目录（此前测试从未真写过 speak.jsonl）
+  writeFileSync(join(tmp, 'emojis', 'other.png'), 'png'); // CD2 的第二张图
+  const hasImage = (b) => segs(b).some((c) => c.p.message.some((x) => x.type === 'image'));
+
+  // CD0：g:900 首发同图（此前该群无发言）→ 成功带图，speak.jsonl 记 emoji
+  const b0 = calls.length;
+  const r0 = await outbound.processMessage({ lines: ['第一张'], sticker: 'test.png' }, meta('900', 'cd0.json'));
+  ok(r0.action === 'sent' && hasImage(b0), 'CD0 冷却前首发表情正常带图');
+
+  // CD1：冷却窗内同群同图 → 降级纯文本
+  const b1 = calls.length;
+  const r1 = await outbound.processMessage({ lines: ['再来一张'], sticker: 'test.png' }, meta('900', 'cd1.json'));
+  ok(r1.action === 'sent' && !hasImage(b1), 'CD1 冷却窗内同图被拦（降级纯文本）', JSON.stringify(r1));
+
+  // CD2：冷却窗内同群换图 → 不拦（冷却只管"重复"，量交给条数闸）
+  const b2 = calls.length;
+  const r2 = await outbound.processMessage({ lines: ['换一张'], sticker: 'other.png' }, meta('900', 'cd2.json'));
+  ok(r2.action === 'sent' && hasImage(b2), 'CD2 冷却窗内换图不拦');
+
+  // CD3：冷却窗外（11 分钟前手写记录）同图 → 放行
+  const speakFile = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
+  appendFileSync(speakFile, JSON.stringify({ ts: new Date(Date.now() - 11 * 60_000).toISOString(), chat: 'g:910', text: '很久以前', source: 'test', emoji: 'test.png' }) + '\n', 'utf8');
+  const b3 = calls.length;
+  const r3 = await outbound.processMessage({ lines: ['隔了很久'], sticker: 'test.png' }, meta('910', 'cd3.json'));
+  ok(r3.action === 'sent' && hasImage(b3), 'CD3 冷却窗外同图放行');
+
+  // CD5 单测：窗口边界/损坏行/ENOENT/fail-closed
+  const cfgProbe = { bridge: { fishpondDir: tmp.replace(/\\/g, '/') } };
+  const recent = JSON.stringify({ ts: new Date(Date.now() - 60_000).toISOString(), chat: 'g:x', emoji: 'a.png' });
+  const stale = JSON.stringify({ ts: new Date(Date.now() - 11 * 60_000).toISOString(), chat: 'g:x', emoji: 'a.png' });
+  const probeDir = join(bridgeDirs(cfgProbe).base, 'logs');
+  mkdirSync(probeDir, { recursive: true });
+  const probeFile = join(probeDir, 'speak.jsonl');
+  writeFileSync(probeFile, [recent, '{broken', stale].join('\n') + '\n', 'utf8');
+  ok(sameStickerRecentlyUsed(cfgProbe, 'g:x', 'a.png', 600) === true, 'CD5a 窗内同图 → true（损坏行跳过不炸）');
+  ok(sameStickerRecentlyUsed(cfgProbe, 'g:x', 'a.png', 60) === false, 'CD5b 超窗（11 分钟前 vs 60s 冷却）→ false');
+  ok(sameStickerRecentlyUsed(cfgProbe, 'g:y', 'a.png', 600) === false, 'CD5c 他群记录不串台');
+  const cfgNoFile = { bridge: { fishpondDir: mkdtempSync(join(tmpdir(), 'fish-cd-')).replace(/\\/g, '/') } };
+  ok(sameStickerRecentlyUsed(cfgNoFile, 'g:x', 'a.png', 600) === false, 'CD5d 无 speak.jsonl（ENOENT）→ false');
 }
 
 // OS 首段剥除（2026-11-26）：独白混进正文首段时剥段保留正文（11-22/11-26 两次实战形态）

@@ -53,7 +53,7 @@ function stripEmojiMarks(rawText, cfg, chatKey) {
 // —— 表情硬闸（G9b，2026-11-21）：emojiGate.enabled 且该 chatKey 最近 window 条发言已有 ≥ max 条
 // 带表情 → 本次表情降级纯文本。prompt 软引导（踩坑 31 / 措辞 v1-v3）对 Flash/low 档无效的工程兜底。
 // 开关/阈值现读 config（mtime 缓存）——控制台切开关即时生效，无需重启适配器。
-const EMOJI_GATE_DEFAULT = { enabled: true, window: 5, max: 2 };
+const EMOJI_GATE_DEFAULT = { enabled: true, window: 5, max: 2, cooldownSec: 600 };
 // EMOJI_GATE_FILE（2026-11-23 修复）：此前按 import.meta.url 推导，指向不存在的 lib/config.json，
 // 硬闸永远走默认值——控制台开关从未生效过。配置在包根 config.json（= ROOT_DIR）；测试隔离下 ROOT_DIR
 // 指向临时目录、读不到即走默认，行为不变。
@@ -61,10 +61,13 @@ const EMOJI_GATE_FILE = join(ROOT_DIR, 'config.json');
 function emojiGateState() {
   try {
     const g = hotJson(EMOJI_GATE_FILE, (d) => d.emojiGate ?? {}) ?? {};
+    const cd = Math.floor(Number(g.cooldownSec));
     return {
       enabled: g.enabled !== false,
       window: Math.max(2, Number(g.window) || 5),
       max: Math.max(1, Number(g.max) || 2),
+      // 同图冷却秒数（P2）：显式 0 = 关闭；非法回退默认 600
+      cooldownSec: Number.isFinite(cd) && cd >= 0 ? cd : EMOJI_GATE_DEFAULT.cooldownSec,
     };
   } catch (e) { log('outbound', `WARN emojiGate 读 config 失败，回退默认 ${JSON.stringify(EMOJI_GATE_DEFAULT)}: ${e.message}`); return { ...EMOJI_GATE_DEFAULT }; }
 }
@@ -131,6 +134,24 @@ function recentEmojiCount(cfg, chatKey, window) {
     // 原先 return 0 是 fail-open：speak.jsonl 读不了时硬闸无声失效，表情照发（G9b 的后门）
     log('outbound', `WARN emoji gate 读 speak.jsonl 失败，本次按已达上限拦截: ${e.message}`);
     return Infinity;
+  }
+}
+
+// 同图冷却（P2，2026-11-28，借鉴 MaiBot emoji_system 对 600s 内用过的表情降权）：条数闸（G9b）
+// 只防"表情刷屏"，防不了"同一张图连发"——复读机形态。数据源复用 speak.jsonl 的 emoji 字段
+// （recordSpeak 已记 basename），零新存储。冷却窗内该 chatKey 发过同 basename → 拦。
+// ENOENT = 还没发过言不拦；真读失败 fail-closed 当冷却命中（与 recentEmojiCount 同哲学）。
+export function sameStickerRecentlyUsed(cfg, chatKey, emojiBase, cooldownSec, now = Date.now()) {
+  try {
+    const speak = join(bridgeDirs(cfg).base, 'logs', 'speak.jsonl');
+    const rows = readFileSync(speak, 'utf8').trim().split('\n').filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+      .filter((r) => r && r.chat === chatKey && r.emoji);
+    return rows.some((r) => r.emoji === emojiBase && now - Date.parse(r.ts) < cooldownSec * 1000);
+  } catch (e) {
+    if (e?.code === 'ENOENT') return false;
+    log('outbound', `WARN emoji cooldown 读 speak.jsonl 失败，本次按冷却命中拦截: ${e.message}`);
+    return true;
   }
 }
 
@@ -311,6 +332,13 @@ export function createOutbound(cfg, onebot, inboundState) {
         log('outbound', `emoji gated: ${chatKey} 最近 ${gate.window} 条已带 ${recent} 次表情（上限 ${gate.max}）——本次降级纯文本`);
         emojiPath = null;
       }
+    }
+
+    // ①.6 同图冷却（P2）：同 chatKey 同 basename 在 cooldownSec 窗内已发过 → 本次降级纯文本。
+    // 显式 cooldownSec=0 关闭；与条数闸独立——刷屏闸管"量"，冷却管"重复"
+    if (emojiPath && gate.cooldownSec > 0 && sameStickerRecentlyUsed(cfg, chatKey, basename(emojiPath), gate.cooldownSec)) {
+      log('outbound', `emoji cooldown: ${chatKey} "${basename(emojiPath).slice(0, 40)}" ${gate.cooldownSec}s 内已用过——本次降级纯文本`);
+      emojiPath = null;
     }
 
     if (!text.trim() && !emojiPath) return drop('empty');

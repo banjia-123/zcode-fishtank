@@ -16,7 +16,7 @@ QQ群/私聊 ⇄ NapCat(OneBot v11 WS:3001) ⇄ 本适配器 ⇄ ZCode app-serve
       → spawn 常驻 ZCode app-server 子进程, session/send + DENY_ALL 零工具
       → session/event 收回复与 usage → 小时级工具面自检+熔断兜底
 
-出站  [SILENT] → 禁词 → 出站审计(整条丢弃 fail-closed) → 表情硬闸
+出站  [SILENT] → 禁词 → 出站审计(整条丢弃 fail-closed) → 表情硬闸+同图冷却(600s)
       → 限额(检查即预占额度) → 引用概率化(@不挂/多人批必挂/慢回复必挂/闲聊20%) → 拟真打字分段 → NapCat HTTP:3000 发送
 ```
 
